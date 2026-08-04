@@ -85,7 +85,7 @@ export default function Beranda() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.actionTitle}>Input Aktivitas Utama</Text>
-            <Text style={styles.actionSub}>Memotong, menjahit, mengobras, dll</Text>
+            <Text style={styles.actionSub}>Memotong, menjahit, mengobras</Text>
           </View>
           <Ionicons name="arrow-forward" size={22} color="#fff" />
         </Pressable>
@@ -96,7 +96,7 @@ export default function Beranda() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.actionTitle}>Input Aktivitas Lain</Text>
-            <Text style={styles.actionSub}>Sholat, makan, ke toilet, dll</Text>
+            <Text style={styles.actionSub}>Sholat, makan, ke toilet</Text>
           </View>
           <Ionicons name="arrow-forward" size={22} color="#fff" />
         </Pressable>
