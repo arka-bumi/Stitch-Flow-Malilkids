@@ -274,6 +274,68 @@ async def create_entry(body: EntryCreate, user = Depends(get_current_user)):
     # basic validation
     if not body.aktivitas_utama and not body.aktivitas_lain:
         raise HTTPException(status_code=400, detail="Harus isi Aktivitas Utama atau Aktivitas Lain")
+
+    # Time validity + overlap check
+    def _tm(t: Optional[str]) -> Optional[int]:
+        if not t or not isinstance(t, str) or ":" not in t:
+            return None
+        try:
+            hh, mm = t.split(":")
+            v = int(hh) * 60 + int(mm)
+            return v if 0 <= v <= 24 * 60 else None
+        except Exception:
+            return None
+
+    u_start = _tm(body.waktu_mulai)
+    u_end = _tm(body.waktu_selesai)
+    l_start = _tm(body.waktu_mulai_lain)
+    l_end = _tm(body.waktu_selesai_lain)
+
+    if body.aktivitas_utama:
+        if u_start is None or u_end is None:
+            raise HTTPException(status_code=400, detail="Waktu Aktivitas Utama tidak lengkap")
+        if u_end <= u_start:
+            raise HTTPException(status_code=400, detail="Waktu Selesai Utama harus lebih besar dari Waktu Mulai")
+    if body.aktivitas_lain:
+        if l_start is None or l_end is None:
+            raise HTTPException(status_code=400, detail="Waktu Aktivitas Lain tidak lengkap")
+        if l_end <= l_start:
+            raise HTTPException(status_code=400, detail="Waktu Selesai Aktivitas Lain harus lebih besar dari Waktu Mulai")
+
+    # Fetch same-day entries for overlap check (skip our own if updating in future)
+    existing = await db.entries.find(
+        {"user_id": user["id"], "tanggal": body.tanggal}, {"_id": 0}
+    ).to_list(1000)
+
+    def _overlap(a1: int, a2: int, b1: int, b2: int) -> bool:
+        return a1 < b2 and b1 < a2
+
+    if body.aktivitas_utama and u_start is not None and u_end is not None:
+        for e in existing:
+            if not e.get("aktivitas_utama"):
+                continue
+            es = _tm(e.get("waktu_mulai")); ee = _tm(e.get("waktu_selesai"))
+            if es is None or ee is None:
+                continue
+            if _overlap(u_start, u_end, es, ee):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Waktu Aktivitas Utama bertabrakan dengan entri sebelumnya: {e['aktivitas_utama']} ({e['waktu_mulai']}-{e['waktu_selesai']})",
+                )
+
+    if body.aktivitas_lain and l_start is not None and l_end is not None:
+        for e in existing:
+            if not e.get("aktivitas_lain"):
+                continue
+            es = _tm(e.get("waktu_mulai_lain")); ee = _tm(e.get("waktu_selesai_lain"))
+            if es is None or ee is None:
+                continue
+            if _overlap(l_start, l_end, es, ee):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Waktu Aktivitas Lain bertabrakan dengan entri sebelumnya: {e['aktivitas_lain']} ({e['waktu_mulai_lain']}-{e['waktu_selesai_lain']})",
+                )
+
     entry = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
