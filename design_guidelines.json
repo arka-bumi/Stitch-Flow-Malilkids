@@ -1,0 +1,155 @@
+{
+  "app_name": "Kapasitas & Performa Penjahit (Factory Time Tracker)",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "Highly readable, durable, and distraction-free utility interface optimized for fast and accurate factory floor data entry.",
+  "color": {
+    "surface": "#FFFFFF",
+    "onSurface": "#1A1A1A",
+    "surfaceSecondary": "#F2F1EC",
+    "onSurfaceSecondary": "#333333",
+    "surfaceTertiary": "#E5E4DE",
+    "onSurfaceTertiary": "#1A1A1A",
+    "surfaceInverse": "#1A1A1A",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#2E5A40",
+    "brandPrimary": "#2E5A40",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#B84C3D",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E1EBE4",
+    "onBrandTertiary": "#1F3E2C",
+    "success": "#237A3D",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D98C00",
+    "onWarning": "#FFFFFF",
+    "error": "#C23030",
+    "onError": "#FFFFFF",
+    "info": "#4A5568",
+    "onInfo": "#FFFFFF",
+    "border": "#E0DFD8",
+    "borderStrong": "#B0AEA5",
+    "divider": "#E0DFD8"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous touch targets (min 48pt) and single-column mobile-friendly form layouts. Clear separation between form sections.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "bottom_tabs",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": false,
+    "do's": [],
+    "dont's": [
+      "Avoid glassmorphism. This is a factory floor utility app where clarity and high contrast are mandatory. Use solid surfaceSecondary instead of glass."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Login",
+      "purpose": "Secure, quick access using Name and PIN.",
+      "states": {
+        "loading": "Centered spinner on surface.",
+        "empty": "N/A",
+        "error": "Red banner below PIN input."
+      },
+      "layout": "Large hero image (sewing factory) with gradient scrim at top, floating single-column form at the bottom (thumb zone). PIN input should use large numeric keypad."
+    },
+    {
+      "name": "Home / Beranda",
+      "purpose": "Overview of today's logged activities and quick access to start new entries.",
+      "states": {
+        "loading": "Skeleton rows for today's history.",
+        "empty": "Illustration of an empty clipboard. Text: 'Belum ada aktivitas hari ini.'",
+        "error": "Error message with 'Coba Lagi' button."
+      },
+      "layout": "Top section: Today's summary (total pieces, total hours). Middle section: Two large cards (Primary Actions) - 'Input Aktivitas Utama' and 'Input Aktivitas Lain'. Bottom: List of recent entries for today."
+    },
+    {
+      "name": "Form Input Aktivitas Utama",
+      "purpose": "Log main production tasks (cutting, sewing) with an option to embed other activities.",
+      "states": {
+        "loading": "Spinner while submitting.",
+        "empty": "N/A",
+        "error": "Inline field errors with red borders and helper text."
+      },
+      "layout": "Single-column form. Labels above fields. Large native dropdowns for Master Data (Jenis Produk, Motif, Aktivitas). Native time pickers for Mulai/Selesai. Include a sticky 'Simpan' CTA at the bottom. A prominent button 'Tambah Aktivitas Lain di waktu ini' to dynamically add an interruption inside this block."
+    },
+    {
+      "name": "Form Input Aktivitas Lain",
+      "purpose": "Log non-production time separately (praying, eating, toilet).",
+      "states": {
+        "loading": "Spinner while submitting.",
+        "empty": "N/A",
+        "error": "Inline validation for overlapping times."
+      },
+      "layout": "Simplified single-column form. Dropdown for activity type. Time pickers. Sticky bottom CTA."
+    },
+    {
+      "name": "Admin Dashboard",
+      "purpose": "Aggregated view and export capability for managers.",
+      "states": {
+        "loading": "Skeleton table/list.",
+        "empty": "No data found for selected date/team.",
+        "error": "Failed to load report."
+      },
+      "layout": "Filter bar at the top (Date, Team, Tailor). Summary stats (Total Hours, Total Output). Scrollable list of worker performance. A sticky FAB or bottom bar to 'Export to Spreadsheet'."
+    }
+  ],
+  "images": {
+    "login_hero": {
+      "url": "https://images.unsplash.com/photo-1675176785803-bffbbb0cd2f4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDZ8MHwxfHNlYXJjaHwxfHxzZXdpbmclMjBtYWNoaW5lJTIwdGV4dGlsZSUyMGZhY3Rvcnl8ZW58MHx8fHwxNzgyNTgwMjg1fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Row of sewing machines in a textile factory"
+    },
+    "history_empty_state": {
+      "url": "https://images.pexels.com/photos/3945359/pexels-photo-3945359.jpeg",
+      "alt": "Blank clipboard on cork board"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Design specifically for factory workers: touch targets must be at least 48x48pt. Padding should be generous.",
+    "Form UX: Use single-column layouts with labels ABOVE inputs. Do NOT use floating labels. Required fields must be clearly marked.",
+    "For all numeric inputs (Time, PIN, Batch count), use a monospace font if possible (e.g., Space Mono or JetBrains Mono) to make scanning numbers easier, though Plus Jakarta Sans handles numbers well.",
+    "Implement the 'Aktivitas Lain' (Interruption) feature inside the 'Aktivitas Utama' form as an expandable sub-form or a bottom sheet that appends the interruption to the current main activity payload.",
+    "Use standard native pickers for time. Pre-fill the current date and time where appropriate.",
+    "Keep contrast extremely high. Disable glassmorphism completely; use solid surfaceSecondary for cards, bottoms sheets, and headers.",
+    "Ensure 'Simpan' (Save) buttons are sticky at the bottom of the screen (above the safe area) during form entry, so users do not have to scroll to find them.",
+    "Never use blue, purple, or indigo. Use the defined Moss Green (#2E5A40) for primary actions and Terracotta (#B84C3D) for destructive/cancel/errors.",
+    "Ensure haptic feedback is added to all primary buttons and form submissions."
+  ]
+}
