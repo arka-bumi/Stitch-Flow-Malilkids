@@ -27,7 +27,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <Ctx.Provider value={{ show }}>
       {children}
-      <Animated.View pointerEvents="none" style={[styles.toast, { opacity, backgroundColor: bg }]} testID="toast">
+      <Animated.View style={[styles.toast, { opacity, backgroundColor: bg, pointerEvents: "none" }]} testID="toast">
         <Text style={styles.text}>{msg}</Text>
       </Animated.View>
     </Ctx.Provider>
