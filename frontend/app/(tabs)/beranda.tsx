@@ -127,7 +127,7 @@ export default function Beranda() {
               <View style={styles.emptyWrap}>
                 <Ionicons name="clipboard-outline" size={48} color={colors.muted} />
                 <Text style={styles.emptyText}>Belum ada aktivitas hari ini.</Text>
-                <Text style={styles.emptySub}>Tekan "Input Pekerjaan Reguler" untuk mulai.</Text>
+                <Text style={styles.emptySub}>Tekan tombol Input Pekerjaan untuk mulai mencatat.</Text>
               </View>
             ) : (
               sorted.map((r, idx) => {
