@@ -70,7 +70,7 @@ export default function AdminLogin() {
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitText}>Masuk</Text>}
           </Pressable>
 
-          <Text style={styles.hint}>Default: admin / admin123</Text>
+          <Text style={styles.hint}>Hubungi super-admin jika lupa password.</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

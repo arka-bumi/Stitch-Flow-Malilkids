@@ -8,9 +8,9 @@ import logging
 import asyncio
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Literal
 import uuid
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
 
@@ -30,12 +30,9 @@ JWT_ALGO = 'HS256'
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# ---------- Models ----------
-class RegisterBody(BaseModel):
-    nama: str
-    pin: str
-    tim: str
+logger = logging.getLogger(__name__)
 
+# ---------- Models ----------
 class LoginBody(BaseModel):
     nama: str
     pin: str
@@ -44,45 +41,75 @@ class AdminLoginBody(BaseModel):
     username: str
     password: str
 
-class AktivitasLain(BaseModel):
+class CreatePenjahitBody(BaseModel):
     nama: str
-    waktu_mulai: str  # HH:mm
+    pin: str
+    tim: str
+
+class UpdatePenjahitBody(BaseModel):
+    tim: Optional[str] = None
+    active: Optional[bool] = None
+    pin: Optional[str] = None
+
+class CreateAdminBody(BaseModel):
+    username: str
+    password: str
+    nama: Optional[str] = None
+
+class AktivitasLainItem(BaseModel):
+    nama: str
+    waktu_mulai: str
     waktu_selesai: str
 
-class EntryCreate(BaseModel):
+class RecordCreate(BaseModel):
+    tanggal: Optional[str] = None  # server sets today if empty
     kode_produksi: str
-    tanggal: str  # YYYY-MM-DD
     jenis_produk: str
     motif: str
+    size: Optional[str] = None
+    mode: Literal["reguler", "khusus_pagi", "khusus_malam"] = "reguler"
+    type: Literal["utama", "lain_saja", "istirahat"] = "utama"
+    aktivitas_utama: Optional[str] = None
+    jumlah_per_batch: Optional[int] = None
+    jumlah_per_aktivitas: Optional[int] = None
+    waktu_mulai: str
+    waktu_selesai: str
+    aktivitas_lain_list: List[AktivitasLainItem] = []
+
+class RecordUpdate(BaseModel):
+    kode_produksi: Optional[str] = None
+    jenis_produk: Optional[str] = None
+    motif: Optional[str] = None
+    size: Optional[str] = None
     aktivitas_utama: Optional[str] = None
     jumlah_per_batch: Optional[int] = None
     jumlah_per_aktivitas: Optional[int] = None
     waktu_mulai: Optional[str] = None
     waktu_selesai: Optional[str] = None
-    aktivitas_lain: Optional[str] = None
-    waktu_mulai_lain: Optional[str] = None
-    waktu_selesai_lain: Optional[str] = None
-
-class MasterAdd(BaseModel):
-    value: str
+    aktivitas_lain_list: Optional[List[AktivitasLainItem]] = None
 
 class SheetConfig(BaseModel):
     spreadsheet_id: str
-    service_account_json: str  # raw JSON string
+    service_account_json: str
     sheet_name: Optional[str] = "Sheet1"
+    master_kode_tab: Optional[str] = "Kode Produksi"
+    master_tahapan_tab: Optional[str] = "Tahapan Standar"
 
 # ---------- Helpers ----------
-def hash_pin(pin: str) -> str:
-    return bcrypt.hashpw(pin.encode(), bcrypt.gensalt()).decode()
+def hash_pw(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
-def verify_pin(pin: str, hashed: str) -> bool:
+def verify_pw(pw: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(pin.encode(), hashed.encode())
+        return bcrypt.checkpw(pw.encode(), hashed.encode())
     except Exception:
         return False
 
 def make_token(user_id: str, role: str) -> str:
-    return jwt.encode({"sub": user_id, "role": role, "iat": datetime.now(timezone.utc).timestamp()}, JWT_SECRET, algorithm=JWT_ALGO)
+    return jwt.encode(
+        {"sub": user_id, "role": role, "iat": datetime.now(timezone.utc).timestamp()},
+        JWT_SECRET, algorithm=JWT_ALGO,
+    )
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
@@ -95,6 +122,8 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "pin_hash": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if user.get("role") == "penjahit" and user.get("active") is False:
+        raise HTTPException(status_code=403, detail="Akun nonaktif. Hubungi admin.")
     user["role"] = payload.get("role", user.get("role", "penjahit"))
     return user
 
@@ -103,33 +132,62 @@ async def require_admin(user = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 
+def tm(t: Optional[str]) -> Optional[int]:
+    if not t or not isinstance(t, str) or ":" not in t:
+        return None
+    try:
+        hh, mm = t.split(":")
+        v = int(hh) * 60 + int(mm)
+        return v if 0 <= v <= 24 * 60 else None
+    except Exception:
+        return None
+
+def overlap(a1: int, a2: int, b1: int, b2: int) -> bool:
+    return a1 < b2 and b1 < a2
+
 # ---------- Google Sheets Sync ----------
 SHEET_HEADERS = [
-    "Nama", "Kode Produksi", "Tanggal", "Tim", "Jenis Produk", "Motif",
+    "Nama", "Kode Produksi", "Tanggal", "Tim", "Jenis Produk", "Motif", "Size",
     "Aktivitas Utama", "Jumlah Per Batch", "Jumlah Per Aktivitas",
     "Waktu Mulai", "Waktu Selesai",
     "Aktivitas Lain", "Waktu Mulai Lain", "Waktu Selesai Lain",
 ]
 
-def _entry_to_row(entry: dict) -> list:
-    return [
-        entry.get("nama", ""),
-        entry.get("kode_produksi", ""),
-        entry.get("tanggal", ""),
-        entry.get("tim", ""),
-        entry.get("jenis_produk", ""),
-        entry.get("motif", ""),
-        entry.get("aktivitas_utama", "") or "",
-        entry.get("jumlah_per_batch", "") if entry.get("jumlah_per_batch") is not None else "",
-        entry.get("jumlah_per_aktivitas", "") if entry.get("jumlah_per_aktivitas") is not None else "",
-        entry.get("waktu_mulai", "") or "",
-        entry.get("waktu_selesai", "") or "",
-        entry.get("aktivitas_lain", "") or "",
-        entry.get("waktu_mulai_lain", "") or "",
-        entry.get("waktu_selesai_lain", "") or "",
-    ]
+def _fmt_tanggal(iso: str) -> str:
+    # store display like "4 Januari 2026"
+    try:
+        y, m, d = iso.split("-")
+        bulan = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+                 "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+        return f"{int(d)} {bulan[int(m)]} {y}"
+    except Exception:
+        return iso
 
-def _get_sheets_service_sync(sa_json_str: str):
+def _record_to_rows(r: dict) -> List[list]:
+    """Duplicate the utama row per aktivitas_lain, or 1 row when no lain."""
+    lains = r.get("aktivitas_lain_list") or []
+    base = [
+        r.get("nama", ""),
+        r.get("kode_produksi", ""),
+        _fmt_tanggal(r.get("tanggal", "")),
+        r.get("tim", ""),
+        r.get("jenis_produk", ""),
+        r.get("motif", ""),
+        r.get("size", "") or "",
+        r.get("aktivitas_utama") or "",
+        r.get("jumlah_per_batch") if r.get("jumlah_per_batch") is not None else "",
+        r.get("jumlah_per_aktivitas") if r.get("jumlah_per_aktivitas") is not None else "",
+        r.get("waktu_mulai", "") if r.get("aktivitas_utama") else "",
+        r.get("waktu_selesai", "") if r.get("aktivitas_utama") else "",
+    ]
+    if not lains:
+        return [base + ["", "", ""]]
+    rows = []
+    for l in lains:
+        rows.append(base + [l.get("nama", ""), l.get("waktu_mulai", ""), l.get("waktu_selesai", "")])
+    return rows
+
+def _get_service_sync(sa_json_str: str):
     info = json.loads(sa_json_str)
     creds = service_account.Credentials.from_service_account_info(
         info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
@@ -139,50 +197,116 @@ def _get_sheets_service_sync(sa_json_str: str):
 def _ensure_headers_sync(service, spreadsheet_id: str, sheet_name: str):
     try:
         res = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=f"{sheet_name}!A1:N1"
+            spreadsheetId=spreadsheet_id, range=f"{sheet_name}!A1:O1"
         ).execute()
         values = res.get("values", [])
         if not values or values[0] != SHEET_HEADERS:
             service.spreadsheets().values().update(
                 spreadsheetId=spreadsheet_id,
-                range=f"{sheet_name}!A1:N1",
+                range=f"{sheet_name}!A1:O1",
                 valueInputOption="RAW",
                 body={"values": [SHEET_HEADERS]},
             ).execute()
     except Exception as e:
         logger.error(f"Ensure headers failed: {e}")
 
-def _append_row_sync(sa_json_str: str, spreadsheet_id: str, sheet_name: str, row: list):
-    service = _get_sheets_service_sync(sa_json_str)
+def _append_rows_sync(sa_json_str: str, spreadsheet_id: str, sheet_name: str, rows: List[list]):
+    service = _get_service_sync(sa_json_str)
     _ensure_headers_sync(service, spreadsheet_id, sheet_name)
     service.spreadsheets().values().append(
         spreadsheetId=spreadsheet_id,
-        range=f"{sheet_name}!A:N",
+        range=f"{sheet_name}!A:O",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
-        body={"values": [row]},
+        body={"values": rows},
     ).execute()
 
-async def sync_entry_to_sheet(entry: dict) -> bool:
+def _read_sheet_sync(sa_json_str: str, spreadsheet_id: str, range_: str) -> List[list]:
+    service = _get_service_sync(sa_json_str)
+    res = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_).execute()
+    return res.get("values", [])
+
+async def _sync_records_to_sheet(records: List[dict]) -> tuple[int, int]:
     cfg = await db.sheet_config.find_one({"id": "default"}, {"_id": 0})
-    if not cfg or not cfg.get("spreadsheet_id") or not cfg.get("service_account_json"):
-        return False
+    if not cfg or not cfg.get("service_account_json"):
+        return 0, len(records)
+    rows: List[list] = []
+    for r in records:
+        rows.extend(_record_to_rows(r))
+    if not rows:
+        return 0, 0
     try:
         await asyncio.to_thread(
-            _append_row_sync,
-            cfg["service_account_json"],
-            cfg["spreadsheet_id"],
-            cfg.get("sheet_name") or "Sheet1",
-            _entry_to_row(entry),
+            _append_rows_sync,
+            cfg["service_account_json"], cfg["spreadsheet_id"],
+            cfg.get("sheet_name") or "Sheet1", rows,
         )
-        return True
+        return len(records), 0
     except Exception as e:
-        logger.error(f"Sheet sync failed: {e}")
-        return False
+        logger.error(f"Sync failed: {e}")
+        return 0, len(records)
 
-# ---------- Auth Routes ----------
-@api_router.post("/auth/register")
-async def register(body: RegisterBody):
+# ---------- Auto Purge (synced records older than 12h) ----------
+async def _purge_synced():
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+    await db.records.delete_many({"is_synced": True, "synced_at": {"$lt": cutoff}})
+
+# ---------- Auth ----------
+@api_router.post("/auth/login")
+async def login(body: LoginBody):
+    nama_norm = body.nama.strip()
+    user = await db.users.find_one({"nama_lower": nama_norm.lower(), "role": "penjahit"})
+    if not user or not verify_pw(body.pin, user["pin_hash"]):
+        raise HTTPException(status_code=401, detail="Nama atau PIN salah")
+    if user.get("active") is False:
+        raise HTTPException(status_code=403, detail="Akun nonaktif. Hubungi admin.")
+    token = make_token(user["id"], "penjahit")
+    return {"token": token, "user": {"id": user["id"], "nama": user["nama"], "tim": user["tim"], "role": "penjahit"}}
+
+@api_router.post("/auth/admin-login")
+async def admin_login(body: AdminLoginBody):
+    admin = await db.users.find_one({"username": body.username.strip().lower(), "role": "admin"})
+    if not admin or not verify_pw(body.password, admin["password_hash"]):
+        raise HTTPException(status_code=401, detail="Username atau password salah")
+    token = make_token(admin["id"], "admin")
+    return {"token": token, "user": {"id": admin["id"], "nama": admin.get("nama", "Admin"), "role": "admin"}}
+
+@api_router.get("/auth/me")
+async def me(user = Depends(get_current_user)):
+    return user
+
+# ---------- Master Data ----------
+@api_router.get("/master-data")
+async def get_master_data(user = Depends(get_current_user)):
+    kode_docs = await db.kode_produksi.find({}, {"_id": 0}).to_list(5000)
+    tahapan_docs = await db.tahapan_standar.find({}, {"_id": 0}).to_list(5000)
+    lain_docs = await db.master_data.find({"type": "aktivitas_lain"}, {"_id": 0}).to_list(500)
+    tim_docs = await db.master_data.find({"type": "tim"}, {"_id": 0}).to_list(500)
+
+    tahapan_by_produk: dict = {}
+    for t in tahapan_docs:
+        jp = t.get("jenis_produk")
+        if not jp:
+            continue
+        tahapan_by_produk.setdefault(jp, []).append(t.get("tahapan"))
+    for k in tahapan_by_produk:
+        tahapan_by_produk[k] = sorted(set(x for x in tahapan_by_produk[k] if x))
+
+    return {
+        "kode_produksi": kode_docs,
+        "tahapan_by_produk": tahapan_by_produk,
+        "aktivitas_lain": sorted(set(d["value"] for d in lain_docs)),
+        "tim": sorted(set(d["value"] for d in tim_docs)),
+    }
+
+# ---------- Penjahit management (Admin only) ----------
+@api_router.get("/admin/penjahit")
+async def list_penjahit(admin = Depends(require_admin)):
+    docs = await db.users.find({"role": "penjahit"}, {"_id": 0, "pin_hash": 0}).to_list(500)
+    return docs
+
+@api_router.post("/admin/penjahit")
+async def create_penjahit(body: CreatePenjahitBody, admin = Depends(require_admin)):
     nama_norm = body.nama.strip()
     if len(nama_norm) < 2:
         raise HTTPException(status_code=400, detail="Nama minimal 2 karakter")
@@ -197,268 +321,269 @@ async def register(body: RegisterBody):
         "nama_lower": nama_norm.lower(),
         "tim": body.tim.strip(),
         "role": "penjahit",
-        "pin_hash": hash_pin(body.pin),
+        "active": True,
+        "pin_hash": hash_pw(body.pin),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user)
-    # ensure team in master data
+    tim_val = body.tim.strip()
     await db.master_data.update_one(
-        {"type": "tim", "value_lower": body.tim.strip().lower()},
-        {"$setOnInsert": {"id": str(uuid.uuid4()), "type": "tim", "value": body.tim.strip(), "value_lower": body.tim.strip().lower()}},
+        {"type": "tim", "value_lower": tim_val.lower()},
+        {"$setOnInsert": {"id": str(uuid.uuid4()), "type": "tim", "value": tim_val, "value_lower": tim_val.lower()}},
         upsert=True,
     )
-    token = make_token(user["id"], "penjahit")
-    return {"token": token, "user": {"id": user["id"], "nama": user["nama"], "tim": user["tim"], "role": "penjahit"}}
-
-@api_router.post("/auth/login")
-async def login(body: LoginBody):
-    nama_norm = body.nama.strip()
-    user = await db.users.find_one({"nama_lower": nama_norm.lower(), "role": "penjahit"})
-    if not user or not verify_pin(body.pin, user["pin_hash"]):
-        raise HTTPException(status_code=401, detail="Nama atau PIN salah")
-    token = make_token(user["id"], "penjahit")
-    return {"token": token, "user": {"id": user["id"], "nama": user["nama"], "tim": user["tim"], "role": "penjahit"}}
-
-@api_router.post("/auth/admin-login")
-async def admin_login(body: AdminLoginBody):
-    admin = await db.users.find_one({"username": body.username.strip().lower(), "role": "admin"})
-    if not admin:
-        raise HTTPException(status_code=401, detail="Username atau password salah")
-    if not verify_pin(body.password, admin["password_hash"]):
-        raise HTTPException(status_code=401, detail="Username atau password salah")
-    token = make_token(admin["id"], "admin")
-    return {"token": token, "user": {"id": admin["id"], "nama": admin.get("nama", "Admin"), "role": "admin"}}
-
-@api_router.get("/auth/me")
-async def me(user = Depends(get_current_user)):
+    user.pop("pin_hash", None)
+    user.pop("_id", None)
     return user
 
-# ---------- Master Data ----------
-DEFAULT_MASTER = {
-    "tim": ["A", "B", "C"],
-    "jenis_produk": ["Kaos", "Kemeja", "Celana", "Jaket"],
-    "motif": ["Hitam", "Putih", "Polos", "Motif"],
-    "aktivitas_utama": ["Memotong Tahap 1", "Finalisasi Potong", "Menjahit Tahap 1", "Finalisasi Jahitan", "Mengobras", "Finishing"],
-    "aktivitas_lain": ["Ke Toilet", "Makan", "Sholat", "Istirahat", "Bantu Numpuk", "Ambil Bahan"],
-}
+@api_router.patch("/admin/penjahit/{user_id}")
+async def update_penjahit(user_id: str, body: UpdatePenjahitBody, admin = Depends(require_admin)):
+    update: dict = {}
+    if body.tim is not None:
+        update["tim"] = body.tim.strip()
+    if body.active is not None:
+        update["active"] = body.active
+    if body.pin is not None:
+        if not (body.pin.isdigit() and 4 <= len(body.pin) <= 6):
+            raise HTTPException(status_code=400, detail="PIN harus 4-6 digit angka")
+        update["pin_hash"] = hash_pw(body.pin)
+    if not update:
+        raise HTTPException(status_code=400, detail="Tidak ada perubahan")
+    res = await db.users.update_one({"id": user_id, "role": "penjahit"}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Penjahit tidak ditemukan")
+    return {"ok": True}
 
-@api_router.get("/master-data")
-async def get_master_data():
-    result = {k: [] for k in DEFAULT_MASTER.keys()}
-    docs = await db.master_data.find({}, {"_id": 0}).to_list(1000)
-    for d in docs:
-        t = d.get("type")
-        if t in result:
-            result[t].append(d["value"])
-    for k, v in result.items():
-        result[k] = sorted(set(v))
-    return result
+@api_router.delete("/admin/penjahit/{user_id}")
+async def delete_penjahit(user_id: str, admin = Depends(require_admin)):
+    res = await db.users.delete_one({"id": user_id, "role": "penjahit"})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Penjahit tidak ditemukan")
+    return {"ok": True}
 
-@api_router.post("/master-data/{type_}")
-async def add_master(type_: str, body: MasterAdd, user = Depends(get_current_user)):
-    if type_ not in DEFAULT_MASTER:
-        raise HTTPException(status_code=400, detail="Tipe tidak valid")
-    v = body.value.strip()
-    if not v:
-        raise HTTPException(status_code=400, detail="Nilai kosong")
-    await db.master_data.update_one(
-        {"type": type_, "value_lower": v.lower()},
-        {"$setOnInsert": {"id": str(uuid.uuid4()), "type": type_, "value": v, "value_lower": v.lower()}},
-        upsert=True,
-    )
-    return {"ok": True, "value": v}
+# ---------- Admin management ----------
+@api_router.get("/admin/admins")
+async def list_admins(admin = Depends(require_admin)):
+    docs = await db.users.find({"role": "admin"}, {"_id": 0, "password_hash": 0}).to_list(50)
+    return docs
 
-# ---------- Entries ----------
-@api_router.post("/entries")
-async def create_entry(body: EntryCreate, user = Depends(get_current_user)):
-    # basic validation
-    if not body.aktivitas_utama and not body.aktivitas_lain:
-        raise HTTPException(status_code=400, detail="Harus isi Aktivitas Utama atau Aktivitas Lain")
+@api_router.post("/admin/admins")
+async def create_admin(body: CreateAdminBody, admin = Depends(require_admin)):
+    uname = body.username.strip().lower()
+    if len(uname) < 3:
+        raise HTTPException(status_code=400, detail="Username minimal 3 karakter")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Password minimal 6 karakter")
+    if await db.users.find_one({"username": uname, "role": "admin"}):
+        raise HTTPException(status_code=400, detail="Username sudah dipakai")
+    a = {
+        "id": str(uuid.uuid4()),
+        "username": uname,
+        "nama": (body.nama or body.username).strip(),
+        "role": "admin",
+        "password_hash": hash_pw(body.password),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(a)
+    a.pop("password_hash", None); a.pop("_id", None)
+    return a
 
-    # Time validity + overlap check
-    def _tm(t: Optional[str]) -> Optional[int]:
-        if not t or not isinstance(t, str) or ":" not in t:
-            return None
-        try:
-            hh, mm = t.split(":")
-            v = int(hh) * 60 + int(mm)
-            return v if 0 <= v <= 24 * 60 else None
-        except Exception:
-            return None
+@api_router.delete("/admin/admins/{admin_id}")
+async def delete_admin(admin_id: str, admin = Depends(require_admin)):
+    count = await db.users.count_documents({"role": "admin"})
+    if count <= 1:
+        raise HTTPException(status_code=400, detail="Minimal harus ada 1 admin")
+    if admin_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Tidak bisa menghapus akun sendiri")
+    res = await db.users.delete_one({"id": admin_id, "role": "admin"})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Admin tidak ditemukan")
+    return {"ok": True}
 
-    u_start = _tm(body.waktu_mulai)
-    u_end = _tm(body.waktu_selesai)
-    l_start = _tm(body.waktu_mulai_lain)
-    l_end = _tm(body.waktu_selesai_lain)
+# ---------- Records ----------
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    if body.aktivitas_utama:
-        if u_start is None or u_end is None:
-            raise HTTPException(status_code=400, detail="Waktu Aktivitas Utama tidak lengkap")
-        if u_end <= u_start:
-            raise HTTPException(status_code=400, detail="Waktu Selesai Utama harus lebih besar dari Waktu Mulai")
-    if body.aktivitas_lain:
-        if l_start is None or l_end is None:
-            raise HTTPException(status_code=400, detail="Waktu Aktivitas Lain tidak lengkap")
-        if l_end <= l_start:
-            raise HTTPException(status_code=400, detail="Waktu Selesai Aktivitas Lain harus lebih besar dari Waktu Mulai")
+def _validate_record_times(r: dict):
+    us = tm(r.get("waktu_mulai")); ue = tm(r.get("waktu_selesai"))
+    if us is None or ue is None:
+        raise HTTPException(status_code=400, detail="Waktu Mulai/Selesai tidak valid")
+    if ue <= us:
+        raise HTTPException(status_code=400, detail="Waktu Selesai harus lebih besar dari Waktu Mulai")
+    for l in r.get("aktivitas_lain_list") or []:
+        ls = tm(l.get("waktu_mulai")); le = tm(l.get("waktu_selesai"))
+        if ls is None or le is None or le <= ls:
+            raise HTTPException(status_code=400, detail=f"Waktu Aktivitas Lain '{l.get('nama','')}' tidak valid")
+        if ls < us or le > ue:
+            raise HTTPException(status_code=400, detail=f"Aktivitas Lain '{l.get('nama','')}' harus di dalam durasi Aktivitas Utama")
 
-    # Fetch same-day entries for overlap check (skip our own if updating in future)
-    existing = await db.entries.find(
-        {"user_id": user["id"], "tanggal": body.tanggal}, {"_id": 0}
-    ).to_list(1000)
+async def _check_overlap_with_existing(user_id: str, tanggal: str, record: dict, exclude_id: Optional[str] = None):
+    us = tm(record.get("waktu_mulai")); ue = tm(record.get("waktu_selesai"))
+    q = {"user_id": user_id, "tanggal": tanggal}
+    if exclude_id:
+        q["id"] = {"$ne": exclude_id}
+    existing = await db.records.find(q, {"_id": 0}).to_list(500)
+    for e in existing:
+        es = tm(e.get("waktu_mulai")); ee = tm(e.get("waktu_selesai"))
+        if es is None or ee is None:
+            continue
+        if overlap(us, ue, es, ee):
+            label = e.get("aktivitas_utama") or (e.get("aktivitas_lain_list") or [{}])[0].get("nama", "Record")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Waktu bertabrakan dengan entri: {label} ({e.get('waktu_mulai')}-{e.get('waktu_selesai')})",
+            )
 
-    def _overlap(a1: int, a2: int, b1: int, b2: int) -> bool:
-        return a1 < b2 and b1 < a2
-
-    if body.aktivitas_utama and u_start is not None and u_end is not None:
-        for e in existing:
-            if not e.get("aktivitas_utama"):
-                continue
-            es = _tm(e.get("waktu_mulai")); ee = _tm(e.get("waktu_selesai"))
-            if es is None or ee is None:
-                continue
-            if _overlap(u_start, u_end, es, ee):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Waktu Aktivitas Utama bertabrakan dengan entri sebelumnya: {e['aktivitas_utama']} ({e['waktu_mulai']}-{e['waktu_selesai']})",
-                )
-
-    if body.aktivitas_lain and l_start is not None and l_end is not None:
-        for e in existing:
-            if not e.get("aktivitas_lain"):
-                continue
-            es = _tm(e.get("waktu_mulai_lain")); ee = _tm(e.get("waktu_selesai_lain"))
-            if es is None or ee is None:
-                continue
-            if _overlap(l_start, l_end, es, ee):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Waktu Aktivitas Lain bertabrakan dengan entri sebelumnya: {e['aktivitas_lain']} ({e['waktu_mulai_lain']}-{e['waktu_selesai_lain']})",
-                )
-
-    entry = {
+@api_router.post("/records")
+async def create_record(body: RecordCreate, user = Depends(get_current_user)):
+    tanggal = body.tanggal or _today_iso()
+    if body.type == "utama" and not body.aktivitas_utama:
+        raise HTTPException(status_code=400, detail="Aktivitas Utama wajib diisi")
+    if body.type == "lain_saja" and not body.aktivitas_lain_list:
+        raise HTTPException(status_code=400, detail="Aktivitas Lain wajib diisi")
+    rec = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
         "nama": user["nama"],
         "tim": user["tim"],
+        "tanggal": tanggal,
         "kode_produksi": body.kode_produksi.strip(),
-        "tanggal": body.tanggal,
         "jenis_produk": body.jenis_produk,
         "motif": body.motif,
-        "aktivitas_utama": body.aktivitas_utama,
-        "jumlah_per_batch": body.jumlah_per_batch,
-        "jumlah_per_aktivitas": body.jumlah_per_aktivitas,
+        "size": body.size,
+        "mode": body.mode,
+        "type": body.type,
+        "aktivitas_utama": body.aktivitas_utama if body.type == "utama" else None,
+        "jumlah_per_batch": body.jumlah_per_batch if body.type == "utama" else None,
+        "jumlah_per_aktivitas": body.jumlah_per_aktivitas if body.type == "utama" else None,
         "waktu_mulai": body.waktu_mulai,
         "waktu_selesai": body.waktu_selesai,
-        "aktivitas_lain": body.aktivitas_lain,
-        "waktu_mulai_lain": body.waktu_mulai_lain,
-        "waktu_selesai_lain": body.waktu_selesai_lain,
+        "aktivitas_lain_list": [l.dict() for l in (body.aktivitas_lain_list or [])],
+        "is_synced": False,
+        "synced_at": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "synced_to_sheet": False,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    await db.entries.insert_one(dict(entry))
-    synced = await sync_entry_to_sheet(entry)
-    if synced:
-        await db.entries.update_one({"id": entry["id"]}, {"$set": {"synced_to_sheet": True}})
-        entry["synced_to_sheet"] = True
-    entry.pop("_id", None)
-    return entry
+    _validate_record_times(rec)
+    await _check_overlap_with_existing(user["id"], tanggal, rec)
+    if body.type == "istirahat":
+        exists = await db.records.find_one({"user_id": user["id"], "tanggal": tanggal, "type": "istirahat"})
+        if exists:
+            raise HTTPException(status_code=400, detail="Istirahat hanya bisa 1x per hari")
+    await db.records.insert_one(dict(rec))
+    rec.pop("_id", None)
+    return rec
 
-@api_router.get("/entries/today")
-async def entries_today(tanggal: Optional[str] = None, user = Depends(get_current_user)):
-    # Client should pass local YYYY-MM-DD. Fallback = UTC date (may differ from client TZ).
-    today = tanggal or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    docs = await db.entries.find({"user_id": user["id"], "tanggal": today}, {"_id": 0}).sort("created_at", -1).to_list(500)
+@api_router.patch("/records/{rid}")
+async def update_record(rid: str, body: RecordUpdate, user = Depends(get_current_user)):
+    existing = await db.records.find_one({"id": rid, "user_id": user["id"]}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Record tidak ditemukan")
+    if existing.get("is_synced"):
+        raise HTTPException(status_code=400, detail="Record sudah disinkron. Tidak bisa diedit.")
+    merged = {**existing}
+    for k, v in body.dict(exclude_none=True).items():
+        if k == "aktivitas_lain_list" and v is not None:
+            merged[k] = [x if isinstance(x, dict) else x.dict() for x in v]
+        else:
+            merged[k] = v
+    merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _validate_record_times(merged)
+    await _check_overlap_with_existing(user["id"], existing["tanggal"], merged, exclude_id=rid)
+    await db.records.update_one({"id": rid}, {"$set": {k: merged[k] for k in [
+        "kode_produksi","jenis_produk","motif","size","aktivitas_utama",
+        "jumlah_per_batch","jumlah_per_aktivitas","waktu_mulai","waktu_selesai",
+        "aktivitas_lain_list","updated_at"
+    ]}})
+    return merged
+
+@api_router.get("/records")
+async def list_records(tanggal: Optional[str] = None, user = Depends(get_current_user)):
+    await _purge_synced()
+    q: dict = {"user_id": user["id"]}
+    if tanggal:
+        q["tanggal"] = tanggal
+    docs = await db.records.find(q, {"_id": 0}).sort("waktu_mulai", 1).to_list(500)
     return docs
 
-@api_router.get("/entries")
-async def list_entries(user = Depends(get_current_user)):
-    docs = await db.entries.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return docs
-
-@api_router.delete("/entries/{entry_id}")
-async def delete_entry(entry_id: str, user = Depends(get_current_user)):
-    q = {"id": entry_id}
+@api_router.delete("/records/{rid}")
+async def delete_record(rid: str, user = Depends(get_current_user)):
+    q = {"id": rid}
     if user.get("role") != "admin":
         q["user_id"] = user["id"]
-    res = await db.entries.delete_one(q)
+        # penjahit cannot delete synced
+        r = await db.records.find_one(q)
+        if r and r.get("is_synced"):
+            raise HTTPException(status_code=400, detail="Record sudah disinkron, tidak bisa dihapus")
+    res = await db.records.delete_one(q)
     if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Entry not found")
+        raise HTTPException(status_code=404, detail="Record tidak ditemukan")
     return {"ok": True}
 
-# ---------- Admin ----------
-@api_router.get("/admin/entries")
-async def admin_entries(
-    tanggal: Optional[str] = None,
-    tim: Optional[str] = None,
-    user_id: Optional[str] = None,
+# ---------- Admin: records ----------
+@api_router.get("/admin/records")
+async def admin_records(
+    tanggal: Optional[str] = None, tim: Optional[str] = None, user_id: Optional[str] = None,
+    is_synced: Optional[bool] = None,
     admin = Depends(require_admin),
 ):
     q: dict = {}
-    if tanggal:
-        q["tanggal"] = tanggal
-    if tim:
-        q["tim"] = tim
-    if user_id:
-        q["user_id"] = user_id
-    docs = await db.entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    if tanggal: q["tanggal"] = tanggal
+    if tim: q["tim"] = tim
+    if user_id: q["user_id"] = user_id
+    if is_synced is not None: q["is_synced"] = is_synced
+    docs = await db.records.find(q, {"_id": 0}).sort([("tanggal", -1), ("waktu_mulai", 1)]).to_list(3000)
     return docs
 
 @api_router.get("/admin/summary")
 async def admin_summary(tanggal: Optional[str] = None, admin = Depends(require_admin)):
     q: dict = {}
-    if tanggal:
-        q["tanggal"] = tanggal
-    docs = await db.entries.find(q, {"_id": 0}).to_list(5000)
-
-    def to_minutes(t):
-        if not t: return 0
-        try:
-            hh, mm = t.split(":")
-            return int(hh) * 60 + int(mm)
-        except Exception:
-            return 0
-
-    total_utama_min = 0
-    total_lain_min = 0
-    total_output = 0
-    per_penjahit: dict = {}
+    if tanggal: q["tanggal"] = tanggal
+    docs = await db.records.find(q, {"_id": 0}).to_list(5000)
+    total_utama = 0; total_lain = 0; total_out = 0
+    per_p: dict = {}
     for d in docs:
-        um = max(0, to_minutes(d.get("waktu_selesai")) - to_minutes(d.get("waktu_mulai")))
-        lm = max(0, to_minutes(d.get("waktu_selesai_lain")) - to_minutes(d.get("waktu_mulai_lain")))
-        total_utama_min += um
-        total_lain_min += lm
+        um = 0
+        if d.get("aktivitas_utama"):
+            um = max(0, (tm(d.get("waktu_selesai")) or 0) - (tm(d.get("waktu_mulai")) or 0))
+        lm = 0
+        for l in d.get("aktivitas_lain_list") or []:
+            lm += max(0, (tm(l.get("waktu_selesai")) or 0) - (tm(l.get("waktu_mulai")) or 0))
+        if d.get("type") == "lain_saja":
+            lm = max(0, (tm(d.get("waktu_selesai")) or 0) - (tm(d.get("waktu_mulai")) or 0))
+        total_utama += um; total_lain += lm
         if d.get("jumlah_per_aktivitas"):
-            total_output += int(d["jumlah_per_aktivitas"])
+            total_out += int(d["jumlah_per_aktivitas"])
         key = d.get("user_id") or d.get("nama")
-        p = per_penjahit.setdefault(key, {"nama": d.get("nama"), "tim": d.get("tim"), "menit_utama": 0, "menit_lain": 0, "output": 0, "entries": 0})
-        p["menit_utama"] += um
-        p["menit_lain"] += lm
+        p = per_p.setdefault(key, {"nama": d.get("nama"), "tim": d.get("tim"),
+                                   "menit_utama": 0, "menit_lain": 0, "output": 0, "records": 0})
+        p["menit_utama"] += um; p["menit_lain"] += lm
         if d.get("jumlah_per_aktivitas"):
             p["output"] += int(d["jumlah_per_aktivitas"])
-        p["entries"] += 1
-
-    users = await db.users.find({"role": "penjahit"}, {"_id": 0, "pin_hash": 0}).to_list(500)
+        p["records"] += 1
     return {
-        "total_entries": len(docs),
-        "total_menit_utama": total_utama_min,
-        "total_menit_lain": total_lain_min,
-        "total_output": total_output,
-        "per_penjahit": list(per_penjahit.values()),
-        "users": users,
+        "total_records": len(docs),
+        "total_menit_utama": total_utama,
+        "total_menit_lain": total_lain,
+        "total_output": total_out,
+        "per_penjahit": list(per_p.values()),
     }
 
+# ---------- Admin: Sheet Config ----------
 @api_router.get("/admin/sheet-config")
 async def get_sheet_config(admin = Depends(require_admin)):
     cfg = await db.sheet_config.find_one({"id": "default"}, {"_id": 0, "service_account_json": 0})
     if not cfg:
         return {"configured": False}
-    return {"configured": True, "spreadsheet_id": cfg.get("spreadsheet_id"), "sheet_name": cfg.get("sheet_name", "Sheet1")}
+    return {"configured": True, **{k: cfg.get(k) for k in
+             ["spreadsheet_id", "sheet_name", "master_kode_tab", "master_tahapan_tab"]}}
 
 @api_router.post("/admin/sheet-config")
 async def set_sheet_config(body: SheetConfig, admin = Depends(require_admin)):
     try:
-        json.loads(body.service_account_json)
+        info = json.loads(body.service_account_json)
+        if not info.get("client_email") or not info.get("private_key"):
+            raise ValueError()
     except Exception:
         raise HTTPException(status_code=400, detail="Service account JSON tidak valid")
     await db.sheet_config.update_one(
@@ -468,36 +593,102 @@ async def set_sheet_config(body: SheetConfig, admin = Depends(require_admin)):
             "spreadsheet_id": body.spreadsheet_id.strip(),
             "service_account_json": body.service_account_json,
             "sheet_name": body.sheet_name or "Sheet1",
+            "master_kode_tab": body.master_kode_tab or "Kode Produksi",
+            "master_tahapan_tab": body.master_tahapan_tab or "Tahapan Standar",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }},
-        upsert=True,
+        }}, upsert=True,
     )
     return {"ok": True}
 
-@api_router.post("/admin/sync-sheet")
-async def sync_all(admin = Depends(require_admin)):
+# ---------- Admin: Sync ----------
+@api_router.post("/admin/sync-records")
+async def sync_records(admin = Depends(require_admin)):
+    """Push all unsynced records to Google Sheet, mark them, then purge >12h synced."""
     cfg = await db.sheet_config.find_one({"id": "default"}, {"_id": 0})
     if not cfg:
-        raise HTTPException(status_code=400, detail="Sheet belum dikonfigurasi")
-    unsynced = await db.entries.find({"synced_to_sheet": {"$ne": True}}, {"_id": 0}).to_list(2000)
-    ok = 0
-    fail = 0
-    for e in unsynced:
-        s = await sync_entry_to_sheet(e)
-        if s:
-            await db.entries.update_one({"id": e["id"]}, {"$set": {"synced_to_sheet": True}})
-            ok += 1
-        else:
-            fail += 1
-    return {"synced": ok, "failed": fail, "total_unsynced_before": len(unsynced)}
+        raise HTTPException(status_code=400, detail="Google Sheet belum dikonfigurasi")
+    unsynced = await db.records.find({"is_synced": {"$ne": True}}, {"_id": 0}).sort("waktu_mulai", 1).to_list(3000)
+    if not unsynced:
+        await _purge_synced()
+        return {"synced": 0, "failed": 0}
+    ok, fail = await _sync_records_to_sheet(unsynced)
+    if ok:
+        now = datetime.now(timezone.utc).isoformat()
+        ids = [r["id"] for r in unsynced]
+        await db.records.update_many(
+            {"id": {"$in": ids}},
+            {"$set": {"is_synced": True, "synced_at": now}},
+        )
+    await _purge_synced()
+    return {"synced": ok, "failed": fail}
+
+@api_router.post("/admin/sync-master")
+async def sync_master(admin = Depends(require_admin)):
+    """Pull Kode Produksi + Tahapan Standar from GSheet tabs."""
+    cfg = await db.sheet_config.find_one({"id": "default"}, {"_id": 0})
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Google Sheet belum dikonfigurasi")
+    sa = cfg["service_account_json"]; sid = cfg["spreadsheet_id"]
+    kode_tab = cfg.get("master_kode_tab") or "Kode Produksi"
+    tahap_tab = cfg.get("master_tahapan_tab") or "Tahapan Standar"
+    # Kode Produksi
+    kode_rows: List[list] = []
+    tahap_rows: List[list] = []
+    try:
+        kode_rows = await asyncio.to_thread(_read_sheet_sync, sa, sid, f"{kode_tab}!A:D")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal baca tab '{kode_tab}': {e}")
+    try:
+        tahap_rows = await asyncio.to_thread(_read_sheet_sync, sa, sid, f"{tahap_tab}!A:B")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal baca tab '{tahap_tab}': {e}")
+
+    # Reset & fill kode_produksi (skip header)
+    kode_docs = []
+    for i, row in enumerate(kode_rows):
+        if i == 0:
+            continue
+        if not row or not row[0]:
+            continue
+        kode_docs.append({
+            "id": str(uuid.uuid4()),
+            "kode": (row[0] or "").strip(),
+            "jenis_produk": (row[1] or "").strip() if len(row) > 1 else "",
+            "motif": (row[2] or "").strip() if len(row) > 2 else "",
+            "size": (row[3] or "").strip() if len(row) > 3 else "",
+        })
+    await db.kode_produksi.delete_many({})
+    if kode_docs:
+        await db.kode_produksi.insert_many(kode_docs)
+
+    tahap_docs = []
+    for i, row in enumerate(tahap_rows):
+        if i == 0:
+            continue
+        if not row or len(row) < 2 or not row[0] or not row[1]:
+            continue
+        tahap_docs.append({
+            "id": str(uuid.uuid4()),
+            "jenis_produk": (row[0] or "").strip(),
+            "tahapan": (row[1] or "").strip(),
+        })
+    await db.tahapan_standar.delete_many({})
+    if tahap_docs:
+        await db.tahapan_standar.insert_many(tahap_docs)
+
+    return {
+        "kode_produksi_count": len(kode_docs),
+        "tahapan_count": len(tahap_docs),
+    }
 
 @api_router.get("/")
 async def root():
-    return {"message": "Penjahit Tracker API"}
+    return {"message": "Penjahit Tracker API v2"}
 
 # ---------- Seed ----------
+DEFAULT_LAIN = ["Ke Toilet", "Makan", "Sholat", "Istirahat", "Bantu Numpuk", "Ambil Bahan", "Menulis"]
+
 async def seed_data():
-    # Admin
     admin = await db.users.find_one({"role": "admin"})
     if not admin:
         await db.users.insert_one({
@@ -505,31 +696,23 @@ async def seed_data():
             "username": "admin",
             "nama": "Administrator",
             "role": "admin",
-            "password_hash": hash_pin("admin123"),
+            "password_hash": hash_pw("admin123"),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.info("Seeded admin user: admin / admin123")
-    # Master data
-    for t, values in DEFAULT_MASTER.items():
-        for v in values:
-            await db.master_data.update_one(
-                {"type": t, "value_lower": v.lower()},
-                {"$setOnInsert": {"id": str(uuid.uuid4()), "type": t, "value": v, "value_lower": v.lower()}},
-                upsert=True,
-            )
+        logger.info("Seeded admin user")
+    for v in DEFAULT_LAIN:
+        await db.master_data.update_one(
+            {"type": "aktivitas_lain", "value_lower": v.lower()},
+            {"$setOnInsert": {"id": str(uuid.uuid4()), "type": "aktivitas_lain", "value": v, "value_lower": v.lower()}},
+            upsert=True,
+        )
 
 app.include_router(api_router)
-
 app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    CORSMiddleware, allow_credentials=True, allow_origins=["*"],
+    allow_methods=["*"], allow_headers=["*"],
 )
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def on_startup():

@@ -1,0 +1,40 @@
+{
+  "summary": "Major restructure retest. Backend: rewrote /app/backend/tests/backend_test.py for v2 API — 47/47 PASSED, 1 SKIPPED (test_patch_synced_forbidden requires direct DB write to set is_synced=true, code path verified via review). Coverage: /api/auth/login + /api/auth/admin-login, /api/auth/register RETURNS 404 (confirmed removed), /api/admin/penjahit CRUD (create-name/PIN validation, list, PATCH tim/active/pin, deactivate blocks login with 403, DELETE), /api/admin/admins CRUD (create with username/password validation, list, self-delete forbidden, last-admin protection via delete other), /api/master-data (auth required, shape kode_produksi/tahapan_by_produk/aktivitas_lain/tim, tim auto-upsert on penjahit create), /api/records (create utama with lain_list, invalid time 400, lain out-of-range 400, overlap 400, istirahat 200, istirahat-2x 400, PATCH persistence via GET, delete other-user 404, delete own 200, admin delete-any 200), /api/admin/records (RBAC 403 for penjahit, tim+tanggal filter), /api/admin/summary (aggregate keys total_records/total_menit_utama/total_menit_lain/total_output/per_penjahit), /api/admin/sheet-config (GET returns configured, POST rejects invalid JSON 400 and missing client_email/private_key 400), /api/admin/sync-records + /api/admin/sync-master (RBAC 403 for penjahit). Frontend (mobile 390x844): Login shows Nama+PIN only, no 'Daftar Baru' tab, no 'admin/admin123' hint, has 'Masuk sebagai Admin' link → admin-login. Admin login → /admin/dashboard renders NavChips (Penjahit/Admin/Sync Master/Settings) + filter-tanggal/filter-tim + btn-sync. /admin/penjahit-mgmt: created UITest_1786209697 tailor via UI (POST 200, appears in list). /admin/admin-mgmt loads with btn-add. Penjahit login → beranda shows greeting + stats + Shift info + Tambah Inputan Khusus (Pre-Shift) card + collapsed cards area + Tambah Lembur Malam (Post-Shift) card + Input Pekerjaan Reguler & Istirahat buttons + 'Selesaikan Input Reguler Hari Ini' inspection. Tab bar has safe-area bottom padding. form-record opens with Kode Produksi dropdown (empty since master not synced), Tahapan disabled 'Pilih Kode Produksi dulu', Aktivitas Lain section with Tambah button.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "Unknown component (View child)", "issue": "Console error observed after penjahit login: 'Unexpected text node: . A text node cannot be a child of a <View>.' Some raw text/whitespace is being rendered directly inside a View instead of a <Text>. Likely candidates: beranda.tsx or form-record.tsx conditional-render blocks with stray whitespace/expression. Non-blocking but should be fixed for web compat. Reference: /app/frontend/app/(tabs)/beranda.tsx and /app/frontend/app/form-record.tsx"},
+    {"component": "pointerEvents prop", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Coming from a dependency (likely expo-router or a modal wrapper) — not app code. Non-blocking; watch for a library upgrade."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Find and fix stray text child of <View> in beranda.tsx or form-record.tsx (search for `{cond && ' '}` or trailing spaces inside JSX outside <Text>).",
+    "(Optional) Track down pointerEvents deprecated warning source; upgrade dep or wrap style.pointerEvents."
+  ],
+  "critical_code_review_comments": [
+    "server.py: /api/records PATCH correctly blocks is_synced=true (line 482-483) but tests could not directly force is_synced=true via API without adding an admin-only mark endpoint or direct DB access — verified only via code review.",
+    "_purge_synced runs on every GET /api/records (line 502) — this is fine but could be moved to a background scheduler if request latency becomes a concern.",
+    "Shift enforcement is intentionally frontend-only (utils/shift.ts). Backend does NOT validate shift bounds — matches spec (non-blocking warning). Confirmed.",
+    "server.py: SHEET_HEADERS + _record_to_rows correctly duplicate the utama row per aktivitas_lain, producing 1 row per lain (spec compliant). Cannot exercise without valid GSheet credentials.",
+    "Backend uses env vars for MONGO_URL/DB_NAME/JWT_SECRET (with fallback) — good. Consider removing JWT_SECRET fallback in production.",
+    "server.py: seed_data only seeds admin + DEFAULT_LAIN. Kode Produksi + Tahapan Standar come only from sync-master (GSheet). If admin never configures GSheet, form-record dropdowns will be empty (spec-compliant but worth surfacing in UI as 'admin belum sinkron master data')."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (rewritten for v2 API)",
+    "/app/test_reports/iteration_2.json (created)",
+    "/app/test_reports/pytest/pytest_results.xml (regenerated)"
+  ],
+  "success_rate": { "backend": "100% (47/47 passed, 1 skipped intentionally)", "frontend": "100% of critical flows verified" },
+  "seed_data_creation": "Backend tests create ephemeral TEST_Zaky_<hex> + TEST_Budi_<hex> penjahits, cleaned up in TestZCleanup. Also create+delete a TEST admin. Frontend UI test created 'UITest_1786209697' tailor via the admin UI — remains in DB. To clean: `db.users.delete_many({'nama': {'$regex': '^UITest_'}})`. `db.records.delete_many({'nama': {'$regex': '^UITest_'}})`.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run backend serially: `pytest /app/backend/tests/backend_test.py -n 0 --junitxml=/app/test_reports/pytest/pytest_results.xml`. Admin auto-seeded (admin/admin123). GSheet flow requires real service_account_json; without it, tests only verify 400 unconfigured path and JSON validation. Frontend admin-login testIDs: admin-username / admin-password / admin-submit. Login testIDs: input-nama / input-pin / btn-submit / btn-admin-login. Beranda buttons: btn-input, btn-istirahat, btn-inspect, btn-khusus-pagi, btn-khusus-malam. Dashboard: nav-penjahit, nav-admin, nav-sync-master, nav-settings, filter-tanggal, filter-tim, btn-sync. Penjahit mgmt: btn-add, add-nama, add-pin, add-tim, btn-save-penjahit, toggle-<id>, reset-pin-<id>, del-penjahit-<id>. Admin mgmt: add-username, add-password, add-nama, btn-save-admin, del-admin-<id>. Form: page 'form-record'.",
+  "rca_of_issue": "No blocking issues. Only cosmetic RN warning ('Unexpected text node' inside View) worth cleaning up. Backend + Frontend fully match the restructured spec."
+}

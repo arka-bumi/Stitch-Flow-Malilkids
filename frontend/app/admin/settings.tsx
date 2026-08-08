@@ -12,6 +12,8 @@ export default function AdminSettings() {
   const toast = useToast();
   const [spreadsheetId, setSpreadsheetId] = useState("");
   const [sheetName, setSheetName] = useState("Sheet1");
+  const [masterKodeTab, setMasterKodeTab] = useState("Kode Produksi");
+  const [masterTahapanTab, setMasterTahapanTab] = useState("Tahapan Standar");
   const [saJson, setSaJson] = useState("");
   const [configured, setConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -23,6 +25,8 @@ export default function AdminSettings() {
         setConfigured(true);
         setSpreadsheetId(c.spreadsheet_id || "");
         setSheetName(c.sheet_name || "Sheet1");
+        setMasterKodeTab(c.master_kode_tab || "Kode Produksi");
+        setMasterTahapanTab(c.master_tahapan_tab || "Tahapan Standar");
       }
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -33,7 +37,13 @@ export default function AdminSettings() {
     try { JSON.parse(saJson); } catch { return toast.show("JSON tidak valid", "error"); }
     setSaving(true);
     try {
-      await api.setSheetConfig(spreadsheetId.trim(), saJson, sheetName.trim() || "Sheet1");
+      await api.setSheetConfig({
+        spreadsheet_id: spreadsheetId.trim(),
+        service_account_json: saJson,
+        sheet_name: sheetName.trim() || "Sheet1",
+        master_kode_tab: masterKodeTab.trim() || "Kode Produksi",
+        master_tahapan_tab: masterTahapanTab.trim() || "Tahapan Standar",
+      });
       toast.show("Konfigurasi tersimpan", "success");
       setConfigured(true);
       setSaJson("");
@@ -67,7 +77,9 @@ export default function AdminSettings() {
               2. Enable Google Sheets API{"\n"}
               3. Download JSON key{"\n"}
               4. Share Google Sheet Anda ke email service account (Editor){"\n"}
-              5. Paste ID Spreadsheet & isi JSON di bawah
+              5. Buat 2 tab tambahan di Spreadsheet: `Kode Produksi` (kolom: Kode | Jenis Produk | Motif | Size) dan `Tahapan Standar` (kolom: Jenis Produk | Tahapan){"\n"}
+              6. Paste ID Spreadsheet & isi JSON di bawah, lalu Simpan{"\n"}
+              7. Klik "Sync Master" di Dashboard untuk narik data
             </Text>
           </View>
 
@@ -84,7 +96,7 @@ export default function AdminSettings() {
               testID="input-sheet-id"
             />
 
-            <Text style={styles.label}>Nama Sheet / Tab</Text>
+            <Text style={styles.label}>Nama Sheet / Tab (Entri)</Text>
             <TextInput
               style={styles.input}
               value={sheetName}
@@ -93,6 +105,12 @@ export default function AdminSettings() {
               placeholderTextColor={colors.muted}
               testID="input-sheet-name"
             />
+
+            <Text style={styles.label}>Tab Master: Kode Produksi</Text>
+            <TextInput style={styles.input} value={masterKodeTab} onChangeText={setMasterKodeTab} placeholder="Kode Produksi" placeholderTextColor={colors.muted} testID="input-kode-tab" />
+
+            <Text style={styles.label}>Tab Master: Tahapan Standar</Text>
+            <TextInput style={styles.input} value={masterTahapanTab} onChangeText={setMasterTahapanTab} placeholder="Tahapan Standar" placeholderTextColor={colors.muted} testID="input-tahapan-tab" />
 
             <Text style={styles.label}>Service Account JSON *</Text>
             <Text style={styles.hint}>Paste seluruh isi file JSON service account</Text>

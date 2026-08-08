@@ -24,8 +24,6 @@ async function req(path: string, opts: RequestInit = {}) {
 }
 
 export const api = {
-  register: (nama: string, pin: string, tim: string) =>
-    req("/auth/register", { method: "POST", body: JSON.stringify({ nama, pin, tim }) }),
   login: (nama: string, pin: string) =>
     req("/auth/login", { method: "POST", body: JSON.stringify({ nama, pin }) }),
   adminLogin: (username: string, password: string) =>
@@ -33,27 +31,36 @@ export const api = {
   me: () => req("/auth/me"),
 
   getMaster: () => req("/master-data"),
-  addMaster: (type: string, value: string) =>
-    req(`/master-data/${type}`, { method: "POST", body: JSON.stringify({ value }) }),
 
-  createEntry: (payload: any) => req("/entries", { method: "POST", body: JSON.stringify(payload) }),
-  entriesToday: (tanggal?: string) => req(`/entries/today${tanggal ? `?tanggal=${tanggal}` : ""}`),
-  entriesAll: () => req("/entries"),
-  deleteEntry: (id: string) => req(`/entries/${id}`, { method: "DELETE" }),
+  createRecord: (payload: any) => req("/records", { method: "POST", body: JSON.stringify(payload) }),
+  updateRecord: (id: string, payload: any) => req(`/records/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  listRecords: (tanggal?: string) => req(`/records${tanggal ? `?tanggal=${tanggal}` : ""}`),
+  deleteRecord: (id: string) => req(`/records/${id}`, { method: "DELETE" }),
 
-  adminEntries: (params: { tanggal?: string; tim?: string; user_id?: string }) => {
+  // Admin
+  listPenjahit: () => req("/admin/penjahit"),
+  createPenjahit: (nama: string, pin: string, tim: string) =>
+    req("/admin/penjahit", { method: "POST", body: JSON.stringify({ nama, pin, tim }) }),
+  updatePenjahit: (id: string, patch: any) =>
+    req(`/admin/penjahit/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deletePenjahit: (id: string) => req(`/admin/penjahit/${id}`, { method: "DELETE" }),
+
+  listAdmins: () => req("/admin/admins"),
+  createAdmin: (username: string, password: string, nama?: string) =>
+    req("/admin/admins", { method: "POST", body: JSON.stringify({ username, password, nama }) }),
+  deleteAdmin: (id: string) => req(`/admin/admins/${id}`, { method: "DELETE" }),
+
+  adminRecords: (params: { tanggal?: string; tim?: string; user_id?: string; is_synced?: boolean }) => {
     const q = new URLSearchParams();
-    Object.entries(params).forEach(([k, v]) => v && q.append(k, String(v)));
-    return req(`/admin/entries${q.toString() ? `?${q.toString()}` : ""}`);
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== "") q.append(k, String(v)); });
+    return req(`/admin/records${q.toString() ? `?${q.toString()}` : ""}`);
   },
   adminSummary: (tanggal?: string) => req(`/admin/summary${tanggal ? `?tanggal=${tanggal}` : ""}`),
+
   getSheetConfig: () => req("/admin/sheet-config"),
-  setSheetConfig: (spreadsheet_id: string, service_account_json: string, sheet_name?: string) =>
-    req("/admin/sheet-config", {
-      method: "POST",
-      body: JSON.stringify({ spreadsheet_id, service_account_json, sheet_name }),
-    }),
-  syncSheet: () => req("/admin/sync-sheet", { method: "POST" }),
+  setSheetConfig: (payload: any) => req("/admin/sheet-config", { method: "POST", body: JSON.stringify(payload) }),
+  syncRecords: () => req("/admin/sync-records", { method: "POST" }),
+  syncMaster: () => req("/admin/sync-master", { method: "POST" }),
 };
 
 export async function saveAuth(token: string, user: any) {
