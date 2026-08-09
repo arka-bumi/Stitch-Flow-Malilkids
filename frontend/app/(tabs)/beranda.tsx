@@ -6,7 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { api, getStoredUser } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
-import { coverageCheck, findGaps, fmtMin, fromMin, isSaturday, shiftRange, toMin, todayISO } from "@/src/utils/shift";
+import { coverageCheck, findGaps, fmtMin, fromMin, isWeekend, shiftRange, toMin, todayISO } from "@/src/utils/shift";
 
 export default function Beranda() {
   const router = useRouter();
@@ -35,7 +35,7 @@ export default function Beranda() {
   const gaps = useMemo(() => findGaps(sorted), [sorted]);
   const hasKhusus = sorted.some((r) => r.mode !== "reguler");
   const hasIstirahat = sorted.some((r) => r.type === "istirahat");
-  const shortShift = isSaturday(todayISO());
+  const shortShift = isWeekend(todayISO());
 
   const totalUtama = sorted.reduce((a, e) => a + (e.aktivitas_utama ? Math.max(0, (toMin(e.waktu_selesai) || 0) - (toMin(e.waktu_mulai) || 0)) : 0), 0);
   const totalOutput = sorted.reduce((a, e) => a + (e.jumlah_per_aktivitas || 0), 0);
@@ -111,7 +111,7 @@ export default function Beranda() {
             <View style={styles.shiftInfo}>
               <Ionicons name="information-circle" size={16} color={colors.info} />
               <Text style={styles.shiftInfoText}>
-                Shift {shortShift ? "Sabtu" : "Weekday"}: {shiftRange(todayISO()).start} - {shiftRange(todayISO()).end}
+                Shift {shortShift ? "Weekend" : "Weekday"}: {shiftRange(todayISO()).start} - {shiftRange(todayISO()).end}
                 {gaps.length > 0 && <Text style={{ color: colors.warning, fontWeight: "700" }}> · {gaps.length} gap terdeteksi</Text>}
               </Text>
             </View>

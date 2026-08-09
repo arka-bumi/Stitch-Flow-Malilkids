@@ -6,6 +6,7 @@ export function isSaturday(dateISO: string): boolean {
     return new Date(y, m - 1, d).getDay() === 6;
   } catch { return false; }
 }
+
 export function isSunday(dateISO: string): boolean {
   try {
     const [y, m, d] = dateISO.split("-").map(Number);
@@ -13,8 +14,12 @@ export function isSunday(dateISO: string): boolean {
   } catch { return false; }
 }
 
+export function isWeekend(dateISO: string): boolean {
+  return isSaturday(dateISO) || isSunday(dateISO);
+}
+
 export function shiftRange(dateISO: string): { start: string; end: string } {
-  return isSaturday(dateISO) ? { start: "08:00", end: "15:00" } : { start: "08:15", end: "17:15" };
+  return isWeekend(dateISO) ? { start: "08:00", end: "15:00" } : { start: "08:15", end: "17:15" };
 }
 
 export function toMin(t?: string | null): number | null {
@@ -77,7 +82,7 @@ export function coverageCheck(records: any[], dateISO: string, includeSpecial: b
   const endOK = lastEnd !== null && lastEnd >= shiftEnd;
   const gaps = findGaps(sorted);
   const hasIstirahat = sorted.some((r) => r.type === "istirahat");
-  const shortShift = isSaturday(dateISO);
+  const shortShift = isWeekend(dateISO);
   const needsIstirahat = !shortShift && !hasIstirahat;
   return { ok: startOK && endOK && gaps.length === 0 && !needsIstirahat, startOK, endOK, gaps, needsIstirahat };
 }
