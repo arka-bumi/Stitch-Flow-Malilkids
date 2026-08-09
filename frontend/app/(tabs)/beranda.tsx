@@ -56,10 +56,10 @@ export default function Beranda() {
     try {
       await api.createRecord({
         tanggal: todayISO(),
-        kode_produksi: null,
-        jenis_produk: null,
-        motif: null,
-        size: null,
+        kode_produksi: last.kode_produksi,
+        jenis_produk: last.jenis_produk,
+        motif: last.motif,
+        size: last.size,
         mode: "reguler",
         type: "istirahat",
         aktivitas_utama: null,
