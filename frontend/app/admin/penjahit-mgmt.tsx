@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Switch } from "react-native";
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Switch, Modal } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,9 +13,16 @@ export default function PenjahitMgmt() {
   const [list, setList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  
+  // State untuk Tambah
   const [nama, setNama] = useState("");
   const [pin, setPin] = useState("");
   const [tim, setTim] = useState("");
+
+  // State untuk Edit Modal
+  const [editTarget, setEditTarget] = useState<any>(null);
+  const [editNama, setEditNama] = useState("");
+  const [editTim, setEditTim] = useState("");
 
   const load = async () => {
     try { setList(await api.listPenjahit()); }
@@ -30,6 +37,27 @@ export default function PenjahitMgmt() {
       await api.createPenjahit(nama.trim(), pin, tim.trim());
       toast.show("Penjahit ditambahkan", "success");
       setNama(""); setPin(""); setTim(""); setShowAdd(false);
+      load();
+    } catch (e: any) { toast.show(e.message, "error"); }
+  };
+
+  // Fungsi Buka Modal Edit
+  const openEdit = (p: any) => {
+    setEditTarget(p);
+    setEditNama(p.nama);
+    setEditTim(p.tim);
+  };
+
+  // Fungsi Simpan Perubahan Edit Nama & Tim
+  const saveEdit = async () => {
+    if (!editNama.trim() || !editTim.trim()) return toast.show("Isi Nama dan Tim", "error");
+    try {
+      await api.updatePenjahit(editTarget.id, { 
+        nama: editNama.trim(), 
+        tim: editTim.trim() 
+      });
+      toast.show("Data penjahit diperbarui", "success");
+      setEditTarget(null);
       load();
     } catch (e: any) { toast.show(e.message, "error"); }
   };
@@ -92,11 +120,19 @@ export default function PenjahitMgmt() {
                 </View>
                 <Switch value={p.active !== false} onValueChange={() => toggleActive(p)} trackColor={{ true: colors.brandPrimary, false: colors.border }} testID={`toggle-${p.id}`} />
               </View>
+              
+              {/* Tombol-tombol Aksi (Edit Nama/Tim, Reset PIN, Hapus) */}
               <View style={styles.actions}>
+                <Pressable style={[styles.actBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => openEdit(p)} testID={`edit-${p.id}`}>
+                  <Ionicons name="create" size={14} color="#fff" />
+                  <Text style={styles.actText}>Edit</Text>
+                </Pressable>
+
                 <Pressable style={[styles.actBtn, { backgroundColor: colors.info }]} onPress={() => resetPin(p)} testID={`reset-pin-${p.id}`}>
                   <Ionicons name="key" size={14} color="#fff" />
                   <Text style={styles.actText}>Reset PIN</Text>
                 </Pressable>
+
                 <Pressable style={[styles.actBtn, { backgroundColor: colors.error }]} onPress={() => del(p)} testID={`del-penjahit-${p.id}`}>
                   <Ionicons name="trash" size={14} color="#fff" />
                   <Text style={styles.actText}>Hapus</Text>
@@ -106,6 +142,29 @@ export default function PenjahitMgmt() {
           ))}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Modal Edit Penjahit */}
+      <Modal visible={!!editTarget} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.formTitle}>Edit Penjahit</Text>
+            <Text style={styles.label}>Nama Penjahit</Text>
+            <TextInput style={styles.input} placeholder="Nama" placeholderTextColor={colors.muted} value={editNama} onChangeText={setEditNama} autoCapitalize="words" />
+            
+            <Text style={styles.label}>Tim</Text>
+            <TextInput style={styles.input} placeholder="Tim" placeholderTextColor={colors.muted} value={editTim} onChangeText={setEditTim} autoCapitalize="characters" />
+
+            <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+              <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: colors.border }]} onPress={() => setEditTarget(null)}>
+                <Text style={[styles.saveText, { color: colors.onSurface }]}>Batal</Text>
+              </Pressable>
+              <Pressable style={[styles.saveBtn, { flex: 1 }]} onPress={saveEdit}>
+                <Text style={styles.saveText}>Simpan</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -115,6 +174,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: "700", color: colors.onSurface },
   formCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg, marginBottom: spacing.lg, borderWidth: 1, borderColor: colors.brandPrimary },
   formTitle: { fontSize: 14, fontWeight: "700", color: colors.brandPrimary, marginBottom: spacing.md, textTransform: "uppercase" },
+  label: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "600" },
   input: { minHeight: 48, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: spacing.md, fontSize: 15, color: colors.onSurface, marginBottom: spacing.sm, backgroundColor: colors.surface },
   saveBtn: { height: 48, borderRadius: radius.md, backgroundColor: colors.brandPrimary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 4 },
   saveText: { color: "#fff", fontWeight: "700" },
@@ -129,4 +189,8 @@ const styles = StyleSheet.create({
   actBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 10, borderRadius: radius.md },
   actText: { color: "#fff", fontWeight: "700", fontSize: 12 },
   empty: { textAlign: "center", color: colors.muted, padding: spacing.xl },
+  
+  // Style Tambahan untuk Modal Pop-up
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
+  modalContent: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg },
 });
