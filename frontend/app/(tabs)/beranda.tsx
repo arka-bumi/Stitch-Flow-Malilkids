@@ -56,10 +56,10 @@ export default function Beranda() {
     try {
       await api.createRecord({
         tanggal: todayISO(),
-        kode_produksi: last.kode_produksi,
-        jenis_produk: last.jenis_produk,
-        motif: last.motif,
-        size: last.size,
+        kode_produksi: null,
+        jenis_produk: null,
+        motif: null,
+        size: null,
         mode: "reguler",
         type: "istirahat",
         aktivitas_utama: null,
@@ -147,7 +147,6 @@ export default function Beranda() {
 
             <View style={styles.actionsRow}>
               <Pressable style={[styles.actionBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => openForm("reguler", lastEnd)} testID="btn-input">
-                
                 <Text style={styles.actionText}>Input Pekerjaan {hasKhusus ? "Khusus" : "Reguler"}</Text>
               </Pressable>
               <Pressable
