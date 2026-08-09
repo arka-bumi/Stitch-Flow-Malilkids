@@ -147,7 +147,7 @@ export default function Beranda() {
 
             <View style={styles.actionsRow}>
               <Pressable style={[styles.actionBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => openForm("reguler", lastEnd)} testID="btn-input">
-                <Ionicons name="hammer" size={20} color="#fff" />
+                
                 <Text style={styles.actionText}>Input Pekerjaan {hasKhusus ? "Khusus" : "Reguler"}</Text>
               </Pressable>
               <Pressable
