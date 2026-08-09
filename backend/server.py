@@ -94,6 +94,7 @@ class SheetConfig(BaseModel):
     sheet_name: Optional[str] = "Sheet1"
     master_kode_tab: Optional[str] = "Kode Produksi"
     master_tahapan_tab: Optional[str] = "Tahapan Standar"
+    master_lain_tab: Optional[str] = "Aktivitas Lain"
 
 # ---------- Helpers ----------
 def hash_pw(pw: str) -> str:
@@ -410,6 +411,9 @@ def _validate_record_times(r: dict):
         raise HTTPException(status_code=400, detail="Waktu Mulai/Selesai tidak valid")
     if ue <= us:
         raise HTTPException(status_code=400, detail="Waktu Selesai harus lebih besar dari Waktu Mulai")
+    # For lain_saja, aktivitas_lain_list items align with record time; skip inner-range check
+    if r.get("type") == "lain_saja":
+        return
     for l in r.get("aktivitas_lain_list") or []:
         ls = tm(l.get("waktu_mulai")); le = tm(l.get("waktu_selesai"))
         if ls is None or le is None or le <= ls:
@@ -419,7 +423,13 @@ def _validate_record_times(r: dict):
 
 async def _check_overlap_with_existing(user_id: str, tanggal: str, record: dict, exclude_id: Optional[str] = None):
     us = tm(record.get("waktu_mulai")); ue = tm(record.get("waktu_selesai"))
+    if us is None or ue is None:
+        return
+    is_lain = record.get("type") == "lain_saja"
     q = {"user_id": user_id, "tanggal": tanggal}
+    # lain_saja overlaps only with other lain_saja (can be concurrent with utama)
+    # utama/istirahat overlaps with other utama/istirahat only
+    q["type"] = "lain_saja" if is_lain else {"$in": ["utama", "istirahat"]}
     if exclude_id:
         q["id"] = {"$ne": exclude_id}
     existing = await db.records.find(q, {"_id": 0}).to_list(500)
@@ -576,7 +586,7 @@ async def get_sheet_config(admin = Depends(require_admin)):
     if not cfg:
         return {"configured": False}
     return {"configured": True, **{k: cfg.get(k) for k in
-             ["spreadsheet_id", "sheet_name", "master_kode_tab", "master_tahapan_tab"]}}
+             ["spreadsheet_id", "sheet_name", "master_kode_tab", "master_tahapan_tab", "master_lain_tab"]}}
 
 @api_router.post("/admin/sheet-config")
 async def set_sheet_config(body: SheetConfig, admin = Depends(require_admin)):
@@ -595,45 +605,95 @@ async def set_sheet_config(body: SheetConfig, admin = Depends(require_admin)):
             "sheet_name": body.sheet_name or "Sheet1",
             "master_kode_tab": body.master_kode_tab or "Kode Produksi",
             "master_tahapan_tab": body.master_tahapan_tab or "Tahapan Standar",
+            "master_lain_tab": body.master_lain_tab or "Aktivitas Lain",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }}, upsert=True,
     )
     return {"ok": True}
 
 # ---------- Admin: Sync ----------
+def _detect_user_gaps(records: List[dict]) -> dict:
+    """Group by (user_id, tanggal), find gaps per group. Return {nama: [{tanggal, gaps: [{from,to}]}]}"""
+    groups: dict = {}
+    for r in records:
+        key = (r.get("user_id"), r.get("tanggal"))
+        groups.setdefault(key, []).append(r)
+    result: dict = {}
+    for (uid, tanggal), items in groups.items():
+        sorted_items = sorted(items, key=lambda x: tm(x.get("waktu_mulai")) or 0)
+        gaps = []
+        for i in range(1, len(sorted_items)):
+            prev_end = tm(sorted_items[i - 1].get("waktu_selesai"))
+            cur_start = tm(sorted_items[i].get("waktu_mulai"))
+            if prev_end is not None and cur_start is not None and cur_start > prev_end:
+                gaps.append({"from": sorted_items[i - 1].get("waktu_selesai"), "to": sorted_items[i].get("waktu_mulai")})
+        if gaps:
+            nama = items[0].get("nama", "?")
+            result.setdefault(nama, []).append({"tanggal": tanggal, "gaps": gaps})
+    return result
+
+@api_router.get("/admin/sync-preview")
+async def sync_preview(include_resync: bool = False, admin = Depends(require_admin)):
+    """Preview what will be synced. Returns new count, resync count (if enabled), and users_with_gaps."""
+    unsynced = await db.records.find({"is_synced": {"$ne": True}}, {"_id": 0}).to_list(3000)
+    resync = []
+    if include_resync:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+        resync = await db.records.find(
+            {"is_synced": True, "synced_at": {"$gte": cutoff}}, {"_id": 0}
+        ).to_list(3000)
+    all_records = unsynced + resync
+    users_with_gaps_dict = _detect_user_gaps(all_records)
+    users_with_gaps = [{"nama": k, "entries": v} for k, v in users_with_gaps_dict.items()]
+    return {
+        "new_count": len(unsynced),
+        "resync_count": len(resync),
+        "users_with_gaps": users_with_gaps,
+    }
+
 @api_router.post("/admin/sync-records")
-async def sync_records(admin = Depends(require_admin)):
-    """Push all unsynced records to Google Sheet, mark them, then purge >12h synced."""
+async def sync_records(include_resync: bool = False, force: bool = False, admin = Depends(require_admin)):
+    """Push records to Google Sheet. If include_resync=true, also re-append records synced <12h ago."""
     cfg = await db.sheet_config.find_one({"id": "default"}, {"_id": 0})
     if not cfg:
         raise HTTPException(status_code=400, detail="Google Sheet belum dikonfigurasi")
     unsynced = await db.records.find({"is_synced": {"$ne": True}}, {"_id": 0}).sort("waktu_mulai", 1).to_list(3000)
-    if not unsynced:
+    resync_records: List[dict] = []
+    if include_resync:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+        resync_records = await db.records.find(
+            {"is_synced": True, "synced_at": {"$gte": cutoff}}, {"_id": 0}
+        ).sort("waktu_mulai", 1).to_list(3000)
+
+    all_records = unsynced + resync_records
+    if not all_records:
         await _purge_synced()
-        return {"synced": 0, "failed": 0}
-    ok, fail = await _sync_records_to_sheet(unsynced)
+        return {"synced": 0, "resynced": 0, "failed": 0}
+
+    ok, fail = await _sync_records_to_sheet(all_records)
     if ok:
         now = datetime.now(timezone.utc).isoformat()
-        ids = [r["id"] for r in unsynced]
+        ids = [r["id"] for r in all_records]
         await db.records.update_many(
             {"id": {"$in": ids}},
             {"$set": {"is_synced": True, "synced_at": now}},
         )
     await _purge_synced()
-    return {"synced": ok, "failed": fail}
+    return {"synced": len(unsynced) if ok else 0, "resynced": len(resync_records) if ok else 0, "failed": fail}
 
 @api_router.post("/admin/sync-master")
 async def sync_master(admin = Depends(require_admin)):
-    """Pull Kode Produksi + Tahapan Standar from GSheet tabs."""
+    """Pull Kode Produksi + Tahapan Standar + Aktivitas Lain from GSheet tabs."""
     cfg = await db.sheet_config.find_one({"id": "default"}, {"_id": 0})
     if not cfg:
         raise HTTPException(status_code=400, detail="Google Sheet belum dikonfigurasi")
     sa = cfg["service_account_json"]; sid = cfg["spreadsheet_id"]
     kode_tab = cfg.get("master_kode_tab") or "Kode Produksi"
     tahap_tab = cfg.get("master_tahapan_tab") or "Tahapan Standar"
-    # Kode Produksi
+    lain_tab = cfg.get("master_lain_tab") or "Aktivitas Lain"
     kode_rows: List[list] = []
     tahap_rows: List[list] = []
+    lain_rows: List[list] = []
     try:
         kode_rows = await asyncio.to_thread(_read_sheet_sync, sa, sid, f"{kode_tab}!A:D")
     except Exception as e:
@@ -642,14 +702,15 @@ async def sync_master(admin = Depends(require_admin)):
         tahap_rows = await asyncio.to_thread(_read_sheet_sync, sa, sid, f"{tahap_tab}!A:B")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Gagal baca tab '{tahap_tab}': {e}")
+    try:
+        lain_rows = await asyncio.to_thread(_read_sheet_sync, sa, sid, f"{lain_tab}!A:A")
+    except Exception:
+        # Aktivitas Lain tab is optional — if missing keep existing defaults
+        lain_rows = []
 
-    # Reset & fill kode_produksi (skip header)
     kode_docs = []
     for i, row in enumerate(kode_rows):
-        if i == 0:
-            continue
-        if not row or not row[0]:
-            continue
+        if i == 0 or not row or not row[0]: continue
         kode_docs.append({
             "id": str(uuid.uuid4()),
             "kode": (row[0] or "").strip(),
@@ -663,10 +724,7 @@ async def sync_master(admin = Depends(require_admin)):
 
     tahap_docs = []
     for i, row in enumerate(tahap_rows):
-        if i == 0:
-            continue
-        if not row or len(row) < 2 or not row[0] or not row[1]:
-            continue
+        if i == 0 or not row or len(row) < 2 or not row[0] or not row[1]: continue
         tahap_docs.append({
             "id": str(uuid.uuid4()),
             "jenis_produk": (row[0] or "").strip(),
@@ -676,9 +734,25 @@ async def sync_master(admin = Depends(require_admin)):
     if tahap_docs:
         await db.tahapan_standar.insert_many(tahap_docs)
 
+    # Aktivitas Lain
+    lain_count = 0
+    if lain_rows:
+        await db.master_data.delete_many({"type": "aktivitas_lain"})
+        for i, row in enumerate(lain_rows):
+            if i == 0 or not row or not row[0]: continue
+            v = (row[0] or "").strip()
+            if not v: continue
+            await db.master_data.update_one(
+                {"type": "aktivitas_lain", "value_lower": v.lower()},
+                {"$setOnInsert": {"id": str(uuid.uuid4()), "type": "aktivitas_lain", "value": v, "value_lower": v.lower()}},
+                upsert=True,
+            )
+            lain_count += 1
+
     return {
         "kode_produksi_count": len(kode_docs),
         "tahapan_count": len(tahap_docs),
+        "aktivitas_lain_count": lain_count,
     }
 
 @api_router.get("/")

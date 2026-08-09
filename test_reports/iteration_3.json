@@ -1,0 +1,44 @@
+{
+  "summary": "v2 follow-up refactor retest. Backend: extended /app/backend/tests/backend_test.py from 48 → 59 tests, all 58 PASSED + 1 SKIPPED (test_patch_synced_forbidden intentionally). Covered NEW endpoints/features: (a) GET /api/admin/sync-preview shape {new_count, resync_count, users_with_gaps} — new_count reflects unsynced records, resync_count=0 without flag, gap detection returns {nama, entries:[{tanggal, gaps:[{from,to}]}]}. (b) GET /api/admin/sync-preview?include_resync=true returns resync_count for records synced <12h ago. (c) POST /api/admin/sync-records now returns {synced, resynced, failed} and accepts include_resync bool param. (d) SheetConfig accepts + returns master_lain_tab (default 'Aktivitas Lain'). (e) POST /api/records: type='lain_saja' is a SEPARATE lane — can be concurrent with type='utama'/'istirahat', but overlaps other lain_saja (400). (f) type='lain_saja' skips the aktivitas_lain inner-range enforcement (per spec). (g) type='lain_saja' with empty aktivitas_lain_list → 400. Frontend (390x844 mobile): ✅ 3-tier Beranda layout confirmed via bounding boxes — Row1: btn-input(y=570,w=175) + btn-input-lain(y=570,w=175) side-by-side; Row2: btn-istirahat(y=634,w=358) full-width; Row3: btn-inspect(y=698,w=358) full-width. ✅ /form-lain opens with Kode Produksi dropdown + Jenis Aktivitas dropdown containing 'Lainnya:' option at the bottom + Waktu Mulai/Selesai + Simpan button. ✅ Admin dashboard btn-sync opens Ringkasan Sync modal showing 'X entri baru akan disinkronkan pertama kali' + 'Y entri akan disinkronkan ulang' + 'Sertakan Re-Sync' toggle + 'Peringatan: Ada Time Gap' with per-user gap list + Batal/Sync Tetap buttons (label switches to 'Sync Tetap (N)' when gaps present, 'Sync Sekarang' otherwise). Toggle-resync switch re-fetches preview with include_resync=true. NOTE: Deprecated packages check — none of expo-av/expo-barcode-scanner/expo-background-fetch present. Console warnings observed (non-blocking): 'Unexpected text node inside <View>' (carryover from iter2) + 'props.pointerEvents is deprecated' (from an RN Web dependency, not app code).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "Unknown View child", "issue": "Console error still present after penjahit login: 'Unexpected text node: . A text node cannot be a child of a <View>.' Likely a stray whitespace/expression inside beranda.tsx or form-record.tsx. Non-blocking on web but breaks native. Reference: /app/frontend/app/(tabs)/beranda.tsx"},
+      {"component": "pointerEvents prop (dependency)", "issue": "Console warning 'props.pointerEvents is deprecated. Use style.pointerEvents' — originates from a RN Web dependency (likely react-native-web or expo-router), not app code. Non-blocking, monitor for lib upgrade."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Locate & fix the stray text node inside a <View> (carryover from iter2). Grep for `{cond &&` returning strings/spaces or template strings with stray whitespace in beranda.tsx / form-record.tsx / form-lain.tsx.",
+    "(Optional) Suppress the pointerEvents deprecation warning by upgrading the offending dep or via a LogBox ignore."
+  ],
+  "critical_code_review_comments": [
+    "server.py:_check_overlap_with_existing correctly implements 2-lane overlap: q['type'] = 'lain_saja' if is_lain else {'$in':['utama','istirahat']} (line 432) — spec compliant.",
+    "server.py:_validate_record_times skips inner-range enforcement when type=='lain_saja' (line 415) — spec compliant.",
+    "server.py:_detect_user_gaps groups by (user_id, tanggal) and finds cur_start > prev_end gaps — correct. Note: only detects gaps INSIDE recorded windows; does not flag records outside regular shift bounds (that check is frontend-only in shift.ts, which matches spec 'INFO not fail').",
+    "server.py:sync-preview & sync-records both filter resync as synced_at>=cutoff (12h) using ISO-string comparison — works because ISO 8601 UTC strings are lexicographically ordered, but be cautious if timezone offsets are ever mixed. Currently only UTC 'Z-less' isoformat is stored so OK.",
+    "server.py:sync-master gracefully tolerates missing Aktivitas Lain tab (try/except → lain_rows=[]) — spec compliant. Also correctly skips wipe of master_data when lain_rows empty, preserving DEFAULT_LAIN seed.",
+    "form-lain.tsx (line 69) submits with type='lain_saja' — aligns with backend RecordCreate.Literal enum. Kode Produksi still required for context/audit.",
+    "dashboard.tsx: preview modal button label logic — should conditionally render 'Sync Tetap (N)' when hasGaps else 'Sync Sekarang (N)'. Confirmed via UI screenshot: label 'Sync Tetap (12)' shown when gaps present."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (added TestSyncPreview + TestLainSajaOverlap + master_lain_tab test class extension)",
+    "/app/test_reports/iteration_3.json (created)",
+    "/app/test_reports/pytest/pytest_results.xml (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (58/58 passed, 1 intentionally skipped)", "frontend": "100% of new v3 flows verified (3-tier layout, form-lain, sync-preview modal, resync toggle, Lainnya option)"},
+  "seed_data_creation": "Backend tests create ephemeral TEST_Zaky_<hex>/TEST_Budi_<hex> penjahits + several test records + configure sheet_config with FAKE service_account_json (spreadsheet_id=TEST_SID_<hex>). Cleanup deletes penjahits; records get auto-purged after their 12h synced_at, but fake-SA sync always fails so they remain is_synced=false. Manual cleanup: db.records.delete_many({'kode_produksi': {'$regex':'^(KP|KP2|LS|LS2|LS3|GAP|PREV|TEST)_'}}). Sheet config persists across runs; safe because sync always fails with fake SA. Frontend created UITest_81af65 tailor; clean with db.users.delete_many({'nama':{'$regex':'^UITest_'}}).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run backend serially: `pytest /app/backend/tests/backend_test.py -n 0 --junitxml=/app/test_reports/pytest/pytest_results.xml`. State dict is shared across classes — DO NOT run in parallel (pytest.ini defaults to -n 2 loadscope; override with -n 0). NEW testIDs: form-lain → dd-kode, dd-lain, input-custom-lain (only when 'Lainnya:' selected), time-mulai, time-selesai, btn-save, btn-back. beranda → btn-input, btn-input-lain, btn-istirahat, btn-inspect. Admin dashboard sync modal → btn-sync (opens), toggle-resync, preview-cancel, preview-confirm, preview-close. Confirm button text switches: 'Sync Sekarang (N)' vs 'Sync Tetap (N)' if hasGaps. Sunday shift = Saturday shift = 08:00-15:00 (per spec note).",
+  "rca_of_issue": "No blocking issues. All requested v3 backend endpoints and frontend flows verified. Only pre-existing cosmetic warnings remain from iter2 (Text node inside View + pointerEvents deprecation)."
+}

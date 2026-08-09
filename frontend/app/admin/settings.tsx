@@ -14,6 +14,7 @@ export default function AdminSettings() {
   const [sheetName, setSheetName] = useState("Sheet1");
   const [masterKodeTab, setMasterKodeTab] = useState("Kode Produksi");
   const [masterTahapanTab, setMasterTahapanTab] = useState("Tahapan Standar");
+  const [masterLainTab, setMasterLainTab] = useState("Aktivitas Lain");
   const [saJson, setSaJson] = useState("");
   const [configured, setConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -27,6 +28,7 @@ export default function AdminSettings() {
         setSheetName(c.sheet_name || "Sheet1");
         setMasterKodeTab(c.master_kode_tab || "Kode Produksi");
         setMasterTahapanTab(c.master_tahapan_tab || "Tahapan Standar");
+        setMasterLainTab(c.master_lain_tab || "Aktivitas Lain");
       }
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -43,6 +45,7 @@ export default function AdminSettings() {
         sheet_name: sheetName.trim() || "Sheet1",
         master_kode_tab: masterKodeTab.trim() || "Kode Produksi",
         master_tahapan_tab: masterTahapanTab.trim() || "Tahapan Standar",
+        master_lain_tab: masterLainTab.trim() || "Aktivitas Lain",
       });
       toast.show("Konfigurasi tersimpan", "success");
       setConfigured(true);
@@ -111,6 +114,9 @@ export default function AdminSettings() {
 
             <Text style={styles.label}>Tab Master: Tahapan Standar</Text>
             <TextInput style={styles.input} value={masterTahapanTab} onChangeText={setMasterTahapanTab} placeholder="Tahapan Standar" placeholderTextColor={colors.muted} testID="input-tahapan-tab" />
+
+            <Text style={styles.label}>Tab Master: Aktivitas Lain</Text>
+            <TextInput style={styles.input} value={masterLainTab} onChangeText={setMasterLainTab} placeholder="Aktivitas Lain" placeholderTextColor={colors.muted} testID="input-lain-tab" />
 
             <Text style={styles.label}>Service Account JSON *</Text>
             <Text style={styles.hint}>Paste seluruh isi file JSON service account</Text>

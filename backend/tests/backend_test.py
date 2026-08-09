@@ -396,6 +396,156 @@ class TestSheetConfig:
         r2 = api_client.post(f"{API}/admin/sync-master", headers=auth(state["tailor_token"]))
         assert r2.status_code == 403
 
+    # NEW: sheet-config accepts master_lain_tab and returns it
+    def test_sheet_config_master_lain_tab_field(self, api_client):
+        valid_sa = ('{"client_email":"x@y.iam.gserviceaccount.com",'
+                    '"private_key":"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n",'
+                    '"type":"service_account"}')
+        r = api_client.post(f"{API}/admin/sheet-config", headers=auth(state["admin_token"]),
+                            json={"spreadsheet_id": f"TEST_SID_{SUFFIX}",
+                                  "service_account_json": valid_sa,
+                                  "sheet_name": "Sheet1",
+                                  "master_kode_tab": "Kode Produksi",
+                                  "master_tahapan_tab": "Tahapan Standar",
+                                  "master_lain_tab": "Aktivitas Lain"})
+        assert r.status_code == 200, r.text
+        g = api_client.get(f"{API}/admin/sheet-config", headers=auth(state["admin_token"]))
+        assert g.status_code == 200
+        body = g.json()
+        assert body.get("configured") is True
+        assert body.get("master_lain_tab") == "Aktivitas Lain"
+        assert body.get("master_kode_tab") == "Kode Produksi"
+        assert body.get("master_tahapan_tab") == "Tahapan Standar"
+
+
+# ---------- NEW: Sync Preview + include_resync + gap detection ----------
+class TestSyncPreview:
+    def test_sync_preview_forbidden_penjahit(self, api_client):
+        r = api_client.get(f"{API}/admin/sync-preview", headers=auth(state["tailor_token"]))
+        assert r.status_code == 403
+
+    def test_sync_preview_shape_and_new_count(self, api_client):
+        # Ensure at least one unsynced record exists (create a fresh one for tailor2)
+        payload = {
+            "tanggal": TODAY, "kode_produksi": f"PREV_{SUFFIX}", "jenis_produk": "Kaos",
+            "motif": "-", "type": "utama", "aktivitas_utama": "Preview Task",
+            "waktu_mulai": "10:00", "waktu_selesai": "11:00",
+        }
+        c = api_client.post(f"{API}/records", headers=auth(state["tailor2_token"]), json=payload)
+        assert c.status_code == 200, c.text
+        state["preview_record_id"] = c.json()["id"]
+
+        r = api_client.get(f"{API}/admin/sync-preview", headers=auth(state["admin_token"]))
+        assert r.status_code == 200, r.text
+        b = r.json()
+        for k in ("new_count", "resync_count", "users_with_gaps"):
+            assert k in b
+        assert isinstance(b["new_count"], int)
+        assert isinstance(b["resync_count"], int)
+        assert isinstance(b["users_with_gaps"], list)
+        assert b["new_count"] >= 1, f"Expected new_count>=1 after creating fresh unsynced record, got {b['new_count']}"
+        # No include_resync -> resync_count must be 0
+        assert b["resync_count"] == 0
+
+    def test_sync_preview_include_resync_flag(self, api_client):
+        r = api_client.get(f"{API}/admin/sync-preview",
+                           headers=auth(state["admin_token"]),
+                           params={"include_resync": "true"})
+        assert r.status_code == 200
+        b = r.json()
+        # resync_count is non-negative int (could be 0 if none synced in <12h)
+        assert isinstance(b["resync_count"], int)
+        assert b["resync_count"] >= 0
+
+    def test_sync_preview_detects_gaps(self, api_client):
+        # Use fresh tailor2 to guarantee unsynced records with a gap.
+        # tailor2 already has "PREV_" record 10:00-11:00 (unsynced). Add another with gap.
+        payload = {
+            "tanggal": TODAY, "kode_produksi": f"GAP_{SUFFIX}", "jenis_produk": "Kaos",
+            "motif": "Polos", "type": "utama", "aktivitas_utama": "Gap Task",
+            "waktu_mulai": "14:00", "waktu_selesai": "15:00",
+        }
+        r = api_client.post(f"{API}/records", headers=auth(state["tailor2_token"]), json=payload)
+        assert r.status_code == 200, r.text
+        state["gap_record_id"] = r.json()["id"]
+        # Now sync-preview should list tailor2 in users_with_gaps
+        p = api_client.get(f"{API}/admin/sync-preview", headers=auth(state["admin_token"]))
+        assert p.status_code == 200
+        gaps = p.json()["users_with_gaps"]
+        names = {u["nama"] for u in gaps}
+        assert TEST_TAILOR2_NAME in names, f"Expected {TEST_TAILOR2_NAME} in {names}"
+        entry = next(u for u in gaps if u["nama"] == TEST_TAILOR2_NAME)
+        assert entry["entries"][0]["tanggal"] == TODAY
+        assert len(entry["entries"][0]["gaps"]) >= 1
+        assert "from" in entry["entries"][0]["gaps"][0]
+        assert "to" in entry["entries"][0]["gaps"][0]
+
+    def test_sync_records_returns_resynced_key(self, api_client):
+        # Configured but SA is fake -> real sync will fail, but response shape must include keys
+        r = api_client.post(f"{API}/admin/sync-records", headers=auth(state["admin_token"]))
+        # Accept 200 (fake SA -> fail path) or 400 (unconfigured). We configured above -> 200 expected.
+        assert r.status_code == 200, r.text
+        b = r.json()
+        for k in ("synced", "resynced", "failed"):
+            assert k in b, f"Missing key {k} in {b}"
+
+    def test_sync_records_include_resync_param(self, api_client):
+        r = api_client.post(f"{API}/admin/sync-records",
+                            headers=auth(state["admin_token"]),
+                            params={"include_resync": "true"})
+        assert r.status_code == 200
+        b = r.json()
+        assert "resynced" in b
+
+
+# ---------- NEW: lain_saja overlap semantics ----------
+class TestLainSajaOverlap:
+    """type='lain_saja' shares its own lane; can be concurrent with utama/istirahat."""
+
+    def test_lain_saja_can_overlap_utama(self, api_client):
+        # record_id (utama) exists 09:00-10:00 for tailor (after PATCH motif). Create lain_saja overlapping.
+        payload = {
+            "tanggal": TODAY, "kode_produksi": f"LS_{SUFFIX}", "jenis_produk": "Kaos",
+            "motif": "-", "type": "lain_saja",
+            "waktu_mulai": "09:15", "waktu_selesai": "09:45",
+            "aktivitas_lain_list": [{"nama": "Sholat", "waktu_mulai": "09:15", "waktu_selesai": "09:45"}],
+        }
+        r = api_client.post(f"{API}/records", headers=auth(state["tailor_token"]), json=payload)
+        assert r.status_code == 200, r.text
+        state["lain_saja_id"] = r.json()["id"]
+
+    def test_lain_saja_overlaps_other_lain_saja(self, api_client):
+        payload = {
+            "tanggal": TODAY, "kode_produksi": f"LS2_{SUFFIX}", "jenis_produk": "Kaos",
+            "motif": "-", "type": "lain_saja",
+            "waktu_mulai": "09:30", "waktu_selesai": "09:50",
+            "aktivitas_lain_list": [{"nama": "Ke Toilet", "waktu_mulai": "09:30", "waktu_selesai": "09:50"}],
+        }
+        r = api_client.post(f"{API}/records", headers=auth(state["tailor_token"]), json=payload)
+        assert r.status_code == 400, r.text
+
+    def test_lain_saja_no_inner_range_enforced(self, api_client):
+        # For lain_saja, aktivitas_lain items are NOT validated to be inside waktu range
+        # (per spec: skip inner-range check for lain_saja)
+        payload = {
+            "tanggal": TODAY, "kode_produksi": f"LS3_{SUFFIX}", "jenis_produk": "Kaos",
+            "motif": "-", "type": "lain_saja",
+            "waktu_mulai": "16:00", "waktu_selesai": "16:30",
+            # aktivitas_lain item can be same as parent; NOT enforced to be within parent
+            "aktivitas_lain_list": [{"nama": "Menulis", "waktu_mulai": "16:00", "waktu_selesai": "16:30"}],
+        }
+        r = api_client.post(f"{API}/records", headers=auth(state["tailor_token"]), json=payload)
+        assert r.status_code == 200, r.text
+        state["lain_saja2_id"] = r.json()["id"]
+
+    def test_lain_saja_missing_lain_list_400(self, api_client):
+        r = api_client.post(f"{API}/records", headers=auth(state["tailor_token"]), json={
+            "tanggal": TODAY, "kode_produksi": "K", "jenis_produk": "K", "motif": "-",
+            "type": "lain_saja",
+            "waktu_mulai": "17:00", "waktu_selesai": "17:30",
+        })
+        assert r.status_code == 400
+
 
 # ---------- Cleanup ----------
 class TestZCleanup:

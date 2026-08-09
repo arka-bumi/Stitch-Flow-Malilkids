@@ -59,7 +59,10 @@ export const api = {
 
   getSheetConfig: () => req("/admin/sheet-config"),
   setSheetConfig: (payload: any) => req("/admin/sheet-config", { method: "POST", body: JSON.stringify(payload) }),
-  syncRecords: () => req("/admin/sync-records", { method: "POST" }),
+  syncRecords: (include_resync: boolean = false) =>
+    req(`/admin/sync-records?include_resync=${include_resync}`, { method: "POST" }),
+  syncPreview: (include_resync: boolean = false) =>
+    req(`/admin/sync-preview?include_resync=${include_resync}`),
   syncMaster: () => req("/admin/sync-master", { method: "POST" }),
 };
 

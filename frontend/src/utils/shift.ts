@@ -69,20 +69,25 @@ export function findGapAgainstPrevious(records: any[], newStart: string): { prev
   return null;
 }
 
-export function coverageCheck(records: any[], dateISO: string, includeSpecial: boolean): {
-  ok: boolean; startOK: boolean; endOK: boolean; gaps: { from: string; to: string }[]; needsIstirahat: boolean;
+export function coverageCheck(records: any[], dateISO: string): {
+  ok: boolean; continuousCoverage: boolean; gaps: { from: string; to: string }[]; needsIstirahat: boolean; outOfShift: boolean;
 } {
   const { start, end } = shiftRange(dateISO);
   const sorted = [...records].sort((a, b) => (toMin(a.waktu_mulai) || 0) - (toMin(b.waktu_mulai) || 0));
-  const firstStart = sorted.length ? toMin(sorted[0].waktu_mulai) : null;
-  const lastEnd = sorted.length ? toMin(sorted[sorted.length - 1].waktu_selesai) : null;
   const shiftStart = toMin(start)!;
   const shiftEnd = toMin(end)!;
-  const startOK = firstStart !== null && firstStart <= shiftStart;
-  const endOK = lastEnd !== null && lastEnd >= shiftEnd;
+  const firstStart = sorted.length ? toMin(sorted[0].waktu_mulai) : null;
+  const lastEnd = sorted.length ? toMin(sorted[sorted.length - 1].waktu_selesai) : null;
   const gaps = findGaps(sorted);
+  const continuousCoverage =
+    firstStart !== null && lastEnd !== null &&
+    firstStart <= shiftStart && lastEnd >= shiftEnd && gaps.length === 0;
   const hasIstirahat = sorted.some((r) => r.type === "istirahat");
   const shortShift = isWeekend(dateISO);
   const needsIstirahat = !shortShift && !hasIstirahat;
-  return { ok: startOK && endOK && gaps.length === 0 && !needsIstirahat, startOK, endOK, gaps, needsIstirahat };
+  const outOfShift = sorted.some((r) => {
+    const s = toMin(r.waktu_mulai), e = toMin(r.waktu_selesai);
+    return (s !== null && s < shiftStart) || (e !== null && e > shiftEnd);
+  });
+  return { ok: continuousCoverage && !needsIstirahat, continuousCoverage, gaps, needsIstirahat, outOfShift };
 }

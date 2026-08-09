@@ -33,7 +33,6 @@ export default function Beranda() {
 
   const sorted = useMemo(() => [...records].sort((a, b) => (toMin(a.waktu_mulai) || 0) - (toMin(b.waktu_mulai) || 0)), [records]);
   const gaps = useMemo(() => findGaps(sorted), [sorted]);
-  const hasKhusus = sorted.some((r) => r.mode !== "reguler");
   const hasIstirahat = sorted.some((r) => r.type === "istirahat");
   const shortShift = isWeekend(todayISO());
 
@@ -41,7 +40,6 @@ export default function Beranda() {
   const totalOutput = sorted.reduce((a, e) => a + (e.jumlah_per_aktivitas || 0), 0);
 
   const lastEnd = sorted.length ? sorted[sorted.length - 1].waktu_selesai : null;
-  const firstStart = sorted.length ? sorted[0].waktu_mulai : null;
 
   const openForm = (mode: "reguler" | "khusus_pagi" | "khusus_malam", suggestStart?: string | null) => {
     router.push({ pathname: "/form-record", params: { mode, suggest_start: suggestStart || "" } });
@@ -73,11 +71,9 @@ export default function Beranda() {
   };
 
   const inspect = () => {
-    const c = coverageCheck(sorted, todayISO(), hasKhusus);
+    const c = coverageCheck(sorted, todayISO());
     setInspection(c);
   };
-
-  const inspectionMode = hasKhusus ? "Khusus" : "Reguler";
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -147,26 +143,32 @@ export default function Beranda() {
 
             <View style={styles.actionsRow}>
               <Pressable style={[styles.actionBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => openForm("reguler", lastEnd)} testID="btn-input">
-                <Text style={styles.actionText}>Input Pekerjaan {hasKhusus ? "Khusus" : "Reguler"}</Text>
+                <Ionicons name="hammer" size={18} color="#fff" />
+                <Text style={styles.actionText}>Input Pekerjaan Reguler</Text>
               </Pressable>
-              <Pressable
-                style={[styles.actionBtn, { backgroundColor: hasIstirahat ? colors.muted : colors.brandSecondary }]}
-                onPress={addIstirahat} disabled={hasIstirahat} testID="btn-istirahat"
-              >
-                <Ionicons name="cafe" size={20} color="#fff" />
-                <Text style={styles.actionText}>Istirahat</Text>
+              <Pressable style={[styles.actionBtn, { backgroundColor: colors.info }]} onPress={() => router.push({ pathname: "/form-lain", params: { suggest_start: lastEnd || "" } })} testID="btn-input-lain">
+                <Ionicons name="cafe-outline" size={18} color="#fff" />
+                <Text style={styles.actionText}>Input Aktivitas Lain</Text>
               </Pressable>
             </View>
 
+            <Pressable
+              style={[styles.actionFull, { backgroundColor: hasIstirahat ? colors.muted : colors.brandSecondary }]}
+              onPress={addIstirahat} disabled={hasIstirahat} testID="btn-istirahat"
+            >
+              <Ionicons name="cafe" size={20} color="#fff" />
+              <Text style={styles.actionText}>{hasIstirahat ? "Istirahat Sudah Diambil" : "Istirahat (1 jam otomatis)"}</Text>
+            </Pressable>
+
             <Pressable style={styles.inspectBtn} onPress={inspect} testID="btn-inspect">
               <Ionicons name="checkmark-done-circle" size={20} color="#fff" />
-              <Text style={styles.inspectText}>Selesaikan Input {inspectionMode} Hari Ini</Text>
+              <Text style={styles.inspectText}>Cek Input Pekerjaan Hari Ini</Text>
             </Pressable>
           </>
         )}
       </ScrollView>
 
-      <InspectionModal visible={!!inspection} data={inspection} onClose={() => setInspection(null)} mode={inspectionMode} shortShift={shortShift} firstStart={firstStart} lastEnd={lastEnd} />
+      <InspectionModal visible={!!inspection} data={inspection} onClose={() => setInspection(null)} shortShift={shortShift} />
     </SafeAreaView>
   );
 }
@@ -240,27 +242,27 @@ function RecordCard({ record, gapWarn, expanded, onToggle, onReload }: any) {
   );
 }
 
-function InspectionModal({ visible, data, onClose, mode, shortShift, firstStart, lastEnd }: any) {
+function InspectionModal({ visible, data, onClose, shortShift }: any) {
   if (!data) return null;
   const items = [
-    { ok: data.startOK, label: `Coverage awal shift (mulai ≤ ${shortShift ? "08:00" : "08:15"})`, actual: firstStart || "-" },
-    { ok: data.endOK, label: `Coverage akhir shift (selesai ≥ ${shortShift ? "15:00" : "17:15"})`, actual: lastEnd || "-" },
+    { ok: data.continuousCoverage, label: `Total coverage shift (${shortShift ? "08:00-15:00" : "08:15-17:15"})`, actual: data.continuousCoverage ? "Lengkap tanpa gap" : "Belum lengkap / ada gap" },
     { ok: data.gaps.length === 0, label: "Tidak ada gap antar record", actual: data.gaps.length ? `${data.gaps.length} gap` : "OK" },
-    { ok: !data.needsIstirahat, label: "Istirahat 1x sudah ada", actual: data.needsIstirahat ? "Belum" : "Sudah" },
+    { ok: !data.needsIstirahat, label: "Istirahat 1x sudah ada", actual: data.needsIstirahat ? "Belum" : (shortShift ? "Tidak wajib (shift pendek)" : "Sudah") },
+    { ok: !data.outOfShift, label: "Terdapat record di luar jam reguler", actual: data.outOfShift ? "Ada (Pre-Shift / Lembur)" : "Tidak ada", info: true },
   ];
-  const allOK = items.every((i) => i.ok);
+  const allOK = items.every((i) => i.ok || i.info);
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose} />
       <View style={styles.inspectSheet}>
         <View style={styles.inspectHead}>
           <Ionicons name={allOK ? "checkmark-circle" : "alert-circle"} size={28} color={allOK ? colors.success : colors.warning} />
-          <Text style={styles.inspectTitle}>{allOK ? `Input ${mode} Lengkap ✓` : `Perlu Dilengkapi`}</Text>
+          <Text style={styles.inspectTitle}>{allOK ? "Input Lengkap" : "Perlu Dilengkapi"}</Text>
           <Pressable onPress={onClose} hitSlop={10} testID="inspect-close"><Ionicons name="close" size={26} color={colors.onSurface} /></Pressable>
         </View>
-        {items.map((it, i) => (
+        {items.map((it: any, i: number) => (
           <View key={i} style={styles.inspectItem}>
-            <Ionicons name={it.ok ? "checkmark-circle" : "close-circle"} size={20} color={it.ok ? colors.success : colors.error} />
+            <Ionicons name={it.info ? "information-circle" : (it.ok ? "checkmark-circle" : "close-circle")} size={20} color={it.info ? colors.info : (it.ok ? colors.success : colors.error)} />
             <View style={{ flex: 1 }}>
               <Text style={styles.inspectLabel}>{it.label}</Text>
               <Text style={styles.inspectActual}>{it.actual}</Text>
@@ -324,6 +326,7 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 15, fontWeight: "600", color: colors.onSurface, marginTop: spacing.sm },
   emptySub: { fontSize: 13, color: colors.muted, marginTop: 4, textAlign: "center" },
   actionsRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
+  actionFull: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 52, borderRadius: radius.md, marginTop: spacing.sm },
   actionBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 56, borderRadius: radius.md },
   actionText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   inspectBtn: { marginTop: spacing.md, height: 56, borderRadius: radius.md, backgroundColor: colors.info, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm },
