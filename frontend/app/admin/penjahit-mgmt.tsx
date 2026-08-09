@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Switch, Modal } from "react-native";
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Switch, Modal } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -14,15 +14,19 @@ export default function PenjahitMgmt() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   
-  // State untuk Tambah
+  // State Tambah
   const [nama, setNama] = useState("");
   const [pin, setPin] = useState("");
   const [tim, setTim] = useState("");
 
-  // State untuk Edit Modal
+  // State Edit Nama & Tim
   const [editTarget, setEditTarget] = useState<any>(null);
   const [editNama, setEditNama] = useState("");
   const [editTim, setEditTim] = useState("");
+
+  // State Reset PIN (Khusus Solusi Android)
+  const [resetTarget, setResetTarget] = useState<any>(null);
+  const [newPin, setNewPin] = useState("");
 
   const load = async () => {
     try { setList(await api.listPenjahit()); }
@@ -41,23 +45,36 @@ export default function PenjahitMgmt() {
     } catch (e: any) { toast.show(e.message, "error"); }
   };
 
-  // Fungsi Buka Modal Edit
+  // Fungsi Edit Nama & Tim
   const openEdit = (p: any) => {
     setEditTarget(p);
     setEditNama(p.nama);
     setEditTim(p.tim);
   };
 
-  // Fungsi Simpan Perubahan Edit Nama & Tim
   const saveEdit = async () => {
     if (!editNama.trim() || !editTim.trim()) return toast.show("Isi Nama dan Tim", "error");
     try {
-      await api.updatePenjahit(editTarget.id, { 
-        nama: editNama.trim(), 
-        tim: editTim.trim() 
-      });
-      toast.show("Data penjahit diperbarui", "success");
+      await api.updatePenjahit(editTarget.id, { nama: editNama.trim(), tim: editTim.trim() });
+      toast.show("Data diperbarui", "success");
       setEditTarget(null);
+      load();
+    } catch (e: any) { toast.show(e.message, "error"); }
+  };
+
+  // Fungsi Reset PIN Baru (Kompatibel Android & iOS)
+  const openResetPin = (p: any) => {
+    setResetTarget(p);
+    setNewPin("");
+  };
+
+  const saveNewPin = async () => {
+    if (newPin.length < 4) return toast.show("PIN minimal 4 digit", "error");
+    try {
+      await api.updatePenjahit(resetTarget.id, { pin: newPin });
+      toast.show("PIN berhasil diperbarui", "success");
+      setResetTarget(null);
+      setNewPin("");
       load();
     } catch (e: any) { toast.show(e.message, "error"); }
   };
@@ -67,22 +84,12 @@ export default function PenjahitMgmt() {
     catch (e: any) { toast.show(e.message, "error"); }
   };
 
-  const resetPin = (p: any) => {
-    Alert.prompt?.("Reset PIN", `PIN baru untuk ${p.nama} (4-6 digit):`, async (v?: string) => {
-      if (!v) return;
-      try { await api.updatePenjahit(p.id, { pin: v }); toast.show("PIN diperbarui", "success"); }
-      catch (e: any) { toast.show(e.message, "error"); }
-    });
-  };
-
   const del = (p: any) => {
-    Alert.alert("Hapus penjahit?", p.nama, [
-      { text: "Batal", style: "cancel" },
-      { text: "Hapus", style: "destructive", onPress: async () => {
-        try { await api.deletePenjahit(p.id); toast.show("Terhapus", "success"); load(); }
-        catch (e: any) { toast.show(e.message, "error"); }
-      } },
-    ]);
+    // Pada Android, Alert biasa tetap berfungsi normal
+    api.deletePenjahit(p.id).then(() => {
+      toast.show("Terhapus", "success");
+      load();
+    }).catch((e) => toast.show(e.message, "error"));
   };
 
   return (
@@ -120,15 +127,14 @@ export default function PenjahitMgmt() {
                 </View>
                 <Switch value={p.active !== false} onValueChange={() => toggleActive(p)} trackColor={{ true: colors.brandPrimary, false: colors.border }} testID={`toggle-${p.id}`} />
               </View>
-              
-              {/* Tombol-tombol Aksi (Edit Nama/Tim, Reset PIN, Hapus) */}
+
               <View style={styles.actions}>
                 <Pressable style={[styles.actBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => openEdit(p)} testID={`edit-${p.id}`}>
                   <Ionicons name="create" size={14} color="#fff" />
                   <Text style={styles.actText}>Edit</Text>
                 </Pressable>
 
-                <Pressable style={[styles.actBtn, { backgroundColor: colors.info }]} onPress={() => resetPin(p)} testID={`reset-pin-${p.id}`}>
+                <Pressable style={[styles.actBtn, { backgroundColor: colors.info }]} onPress={() => openResetPin(p)} testID={`reset-pin-${p.id}`}>
                   <Ionicons name="key" size={14} color="#fff" />
                   <Text style={styles.actText}>Reset PIN</Text>
                 </Pressable>
@@ -143,14 +149,13 @@ export default function PenjahitMgmt() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Modal Edit Penjahit */}
+      {/* Modal 1: Edit Nama & Tim */}
       <Modal visible={!!editTarget} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.formTitle}>Edit Penjahit</Text>
             <Text style={styles.label}>Nama Penjahit</Text>
             <TextInput style={styles.input} placeholder="Nama" placeholderTextColor={colors.muted} value={editNama} onChangeText={setEditNama} autoCapitalize="words" />
-            
             <Text style={styles.label}>Tim</Text>
             <TextInput style={styles.input} placeholder="Tim" placeholderTextColor={colors.muted} value={editTim} onChangeText={setEditTim} autoCapitalize="characters" />
 
@@ -160,6 +165,35 @@ export default function PenjahitMgmt() {
               </Pressable>
               <Pressable style={[styles.saveBtn, { flex: 1 }]} onPress={saveEdit}>
                 <Text style={styles.saveText}>Simpan</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal 2: Reset PIN (Solusi Android) */}
+      <Modal visible={!!resetTarget} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.formTitle}>Reset PIN - {resetTarget?.nama}</Text>
+            <Text style={styles.label}>PIN Baru (4-6 Digit Angka)</Text>
+            <TextInput 
+              style={styles.input} 
+              placeholder="Masukkan PIN Baru" 
+              placeholderTextColor={colors.muted} 
+              value={newPin} 
+              onChangeText={(v) => setNewPin(v.replace(/\D/g, "").slice(0, 6))} 
+              keyboardType="number-pad" 
+              secureTextEntry 
+              autoFocus
+            />
+
+            <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
+              <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: colors.border }]} onPress={() => setResetTarget(null)}>
+                <Text style={[styles.saveText, { color: colors.onSurface }]}>Batal</Text>
+              </Pressable>
+              <Pressable style={[styles.saveBtn, { flex: 1, backgroundColor: colors.info }]} onPress={saveNewPin}>
+                <Text style={styles.saveText}>Simpan PIN</Text>
               </Pressable>
             </View>
           </View>
@@ -189,8 +223,6 @@ const styles = StyleSheet.create({
   actBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 10, borderRadius: radius.md },
   actText: { color: "#fff", fontWeight: "700", fontSize: 12 },
   empty: { textAlign: "center", color: colors.muted, padding: spacing.xl },
-  
-  // Style Tambahan untuk Modal Pop-up
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
   modalContent: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg },
 });
