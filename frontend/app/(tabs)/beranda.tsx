@@ -226,7 +226,7 @@ function RecordCard({ record, gapWarn, expanded, onToggle, onReload }: any) {
           )}
           {!record.is_synced && (
             <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
-              <Pressable style={[styles.smallBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => router.push({ pathname: "/form-record", params: { edit_id: record.id } })} testID={`edit-${record.id}`}>
+              <Pressable style={[styles.smallBtn, { backgroundColor: colors.brandPrimary }]} onPress={() => router.push({ pathname: record.type === "utama" ? "/form-record" : "/form-lain", params: { edit_id: record.id } })} testID={`edit-${record.id}`}>
                 <Ionicons name="create" size={16} color="#fff" />
                 <Text style={styles.smallBtnText}>Edit</Text>
               </Pressable>

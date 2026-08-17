@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { api } from "@/src/api/client";
@@ -10,17 +10,23 @@ import { useToast } from "@/src/components/Toast";
 import { Dropdown } from "@/src/components/Dropdown";
 import { TimeField } from "@/src/components/TimeField";
 import { todayISO, toMin } from "@/src/utils/shift";
+import { storage } from "@/src/utils/storage";
 
 const LAINNYA = "Lainnya:";
+const LAST_KODE_KEY = "last_kode_produksi";
 
 export default function FormLain() {
   const router = useRouter();
   const toast = useToast();
-  const params = useLocalSearchParams<{ suggest_start?: string }>();
+  const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{ suggest_start?: string; edit_id?: string }>();
+  const editMode = !!params.edit_id;
 
   const [master, setMaster] = useState<any>({ kode_produksi: [], aktivitas_lain: [] });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [lastKode, setLastKode] = useState("");
+  const [recordType, setRecordType] = useState<"lain_saja" | "istirahat">("lain_saja");
 
   const [kodeProduksi, setKodeProduksi] = useState("");
   const [jenisProduk, setJenisProduk] = useState("");
@@ -35,9 +41,45 @@ export default function FormLain() {
   const lainOptions = useMemo(() => [...(master.aktivitas_lain || []), LAINNYA], [master.aktivitas_lain]);
   const isCustom = aktivitasLain === LAINNYA;
 
-  useEffect(() => {
-    api.getMaster().then((m) => { setMaster(m); }).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        try {
+          const [m, savedKode, todays] = await Promise.all([
+            api.getMaster(),
+            storage.getItem(LAST_KODE_KEY, ""),
+            editMode ? api.listRecords(todayISO()) : Promise.resolve([]),
+          ]);
+          if (!active) return;
+          setMaster(m);
+          setLastKode(savedKode || "");
+          if (editMode && params.edit_id) {
+            const found = (todays || []).find((r: any) => r.id === params.edit_id);
+            if (found) {
+              setRecordType(found.type === "istirahat" ? "istirahat" : "lain_saja");
+              setKodeProduksi(found.kode_produksi);
+              setJenisProduk(found.jenis_produk);
+              setMotif(found.motif);
+              setSize(found.size || "");
+              const namaLain = found.aktivitas_lain_list?.[0]?.nama || "";
+              const opts: string[] = m.aktivitas_lain || [];
+              if (namaLain && !opts.includes(namaLain)) {
+                setAktivitasLain(LAINNYA);
+                setCustomLain(namaLain);
+              } else {
+                setAktivitasLain(namaLain);
+              }
+              setWaktuMulai(found.waktu_mulai);
+              setWaktuSelesai(found.waktu_selesai);
+            }
+          }
+        } catch (e: any) { toast.show(e.message || "Gagal memuat", "error"); }
+        finally { if (active) setLoading(false); }
+      })();
+      return () => { active = false; };
+    }, [params.edit_id])
+  );
 
   const onSelectKode = (kode: string) => {
     setKodeProduksi(kode);
@@ -59,19 +101,25 @@ export default function FormLain() {
 
     setSubmitting(true);
     try {
-      await api.createRecord({
+      const payload = {
         tanggal: todayISO(),
         kode_produksi: kodeProduksi,
         jenis_produk: jenisProduk,
         motif,
         size: size || null,
         mode: "reguler",
-        type: "lain_saja",
+        type: recordType,
         aktivitas_utama: null,
         waktu_mulai: waktuMulai,
         waktu_selesai: waktuSelesai,
         aktivitas_lain_list: [{ nama: finalNama, waktu_mulai: waktuMulai, waktu_selesai: waktuSelesai }],
-      });
+      };
+      if (editMode && params.edit_id) {
+        await api.updateRecord(params.edit_id, payload);
+      } else {
+        await api.createRecord(payload);
+      }
+      await storage.setItem(LAST_KODE_KEY, kodeProduksi);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       toast.show("Tersimpan", "success");
       router.back();
@@ -87,7 +135,7 @@ export default function FormLain() {
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.surfaceSecondary }} edges={["top"]}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} testID="btn-back"><Ionicons name="arrow-back" size={26} color={colors.onSurface} /></Pressable>
-        <Text style={styles.title}>Input Aktivitas Lain</Text>
+        <Text style={styles.title}>{editMode ? (recordType === "istirahat" ? "Edit Istirahat" : "Edit Aktivitas Lain") : "Input Aktivitas Lain"}</Text>
         <View style={{ width: 26 }} />
       </View>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
@@ -95,6 +143,12 @@ export default function FormLain() {
           <View style={styles.card}>
             <Text style={styles.section}>Konteks Produksi</Text>
             <Dropdown label="Kode Produksi" required value={kodeProduksi} options={kodeOptions} onChange={onSelectKode} testID="dd-kode" />
+            {!!lastKode && lastKode !== kodeProduksi && (
+              <Pressable style={styles.reuseRow} onPress={() => onSelectKode(lastKode)} testID="checkbox-reuse-kode">
+                <Ionicons name="square-outline" size={18} color={colors.info} />
+                <Text style={styles.reuseText}>Kode produksi sebelumnya: {lastKode}</Text>
+              </Pressable>
+            )}
             {kodeProduksi && (
               <View style={styles.autoFillBox}>
                 <Ionicons name="information-circle" size={14} color={colors.info} />
@@ -128,10 +182,10 @@ export default function FormLain() {
             </View>
           </View>
         </ScrollView>
-        <View style={styles.stickyBar}>
+        <View style={[styles.stickyBar, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <Pressable style={styles.saveBtn} onPress={submit} disabled={submitting} testID="btn-save">
             {submitting ? <ActivityIndicator color="#fff" /> : (
-              <><Ionicons name="checkmark-circle" size={22} color="#fff" /><Text style={styles.saveText}>Simpan Aktivitas Lain</Text></>
+              <><Ionicons name="checkmark-circle" size={22} color="#fff" /><Text style={styles.saveText}>{editMode ? "Update" : "Simpan Aktivitas Lain"}</Text></>
             )}
           </Pressable>
         </View>
@@ -152,7 +206,10 @@ const styles = StyleSheet.create({
   row2: { flexDirection: "row", gap: spacing.md, marginBottom: spacing.md },
   autoFillBox: { flexDirection: "row", alignItems: "center", gap: 4, padding: 8, backgroundColor: colors.brandTertiary, borderRadius: radius.sm, marginTop: 4 },
   autoFillText: { color: colors.info, fontSize: 12, fontWeight: "600", flex: 1 },
+  reuseRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4, marginBottom: spacing.xs },
+  reuseText: { color: colors.info, fontSize: 12, fontWeight: "600", flex: 1 },
   stickyBar: { position: "absolute", bottom: 0, left: 0, right: 0, padding: spacing.lg, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.divider },
   saveBtn: { height: 56, borderRadius: radius.md, backgroundColor: colors.info, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm },
   saveText: { color: "#fff", fontSize: 16, fontWeight: "700" },
 });
+

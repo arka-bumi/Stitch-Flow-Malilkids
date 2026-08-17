@@ -2,7 +2,7 @@ import React, { useCallback, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, RefreshControl, TextInput, Modal, Switch } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { api, clearAuth } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
@@ -11,6 +11,7 @@ import { todayISO, fmtMin } from "@/src/utils/shift";
 export default function AdminDashboard() {
   const router = useRouter();
   const toast = useToast();
+  const insets = useSafeAreaInsets();
   const [tanggal, setTanggal] = useState(todayISO());
   const [tim, setTim] = useState("");
   const [summary, setSummary] = useState<any>(null);
@@ -160,7 +161,7 @@ export default function AdminDashboard() {
         )}
       </ScrollView>
 
-      <View style={styles.fab}>
+      <View style={[styles.fab, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
         <Pressable style={styles.fabBtn} onPress={openSyncPreview} disabled={loadingPreview} testID="btn-sync">
           {loadingPreview ? <ActivityIndicator color="#fff" /> : (
             <><Ionicons name="cloud-upload" size={20} color="#fff" /><Text style={styles.fabText}>Sync ke Google Sheet</Text></>

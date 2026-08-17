@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, TextInput, StyleSheet, Pressable, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
@@ -10,6 +10,7 @@ import { useToast } from "@/src/components/Toast";
 export default function AdminSettings() {
   const router = useRouter();
   const toast = useToast();
+  const insets = useSafeAreaInsets();
   const [spreadsheetId, setSpreadsheetId] = useState("");
   const [sheetName, setSheetName] = useState("Sheet1");
   const [masterKodeTab, setMasterKodeTab] = useState("Kode Produksi");
@@ -133,7 +134,7 @@ export default function AdminSettings() {
             />
           </View>
         </ScrollView>
-        <View style={styles.bar}>
+        <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <Pressable style={styles.saveBtn} onPress={save} disabled={saving} testID="btn-save-config">
             {saving ? <ActivityIndicator color="#fff" /> : (
               <><Ionicons name="save" size={20} color="#fff" /><Text style={styles.saveText}>Simpan Konfigurasi</Text></>

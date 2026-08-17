@@ -670,6 +670,9 @@ async def sync_records(include_resync: bool = False, force: bool = False, admin 
         await _purge_synced()
         return {"synced": 0, "resynced": 0, "failed": 0}
 
+    # Sort export payload: Date asc -> Worker Name (A-Z) -> Start Time asc
+    all_records.sort(key=lambda r: (r.get("tanggal") or "", (r.get("nama") or "").lower(), tm(r.get("waktu_mulai")) or 0))
+
     ok, fail = await _sync_records_to_sheet(all_records)
     if ok:
         now = datetime.now(timezone.utc).isoformat()
