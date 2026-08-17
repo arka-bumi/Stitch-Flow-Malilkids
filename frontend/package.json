@@ -5,6 +5,7 @@
   "scripts": {
     "start": "expo start",
     "build": "expo export -p web",
+    "deploy": "gh-pages -d dist",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
@@ -53,6 +54,7 @@
     "eslint": "9.25.0",
     "eslint-config-expo": "10.0.0",
     "expo-doctor": "1.19.8",
+    "gh-pages": "6.3.0",
     "typescript": "5.9.3"
   },
   "resolutions": {
