@@ -4,7 +4,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, spacing } from "@/src/theme/colors";
-import { api, clearAuth } from "@/src/api/client";
+import { api, clearAuth, getStoredUser } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { todayISO, fmtMin } from "@/src/utils/shift";
 
@@ -23,6 +23,7 @@ export default function AdminDashboard() {
   const [preview, setPreview] = useState<any>(null);
   const [includeResync, setIncludeResync] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
   const load = async () => {
     try {
@@ -31,7 +32,11 @@ export default function AdminDashboard() {
     } catch (err: any) { toast.show(err.message || "Gagal memuat", "error"); }
     finally { setLoading(false); setRefreshing(false); }
   };
-  useFocusEffect(useCallback(() => { setLoading(true); load(); }, [tanggal, tim]));
+  useFocusEffect(useCallback(() => {
+    setLoading(true);
+    load();
+    getStoredUser().then((u) => setIsSuperAdmin(!!u?.is_super_admin));
+  }, [tanggal, tim]));
 
   const logout = async () => { await clearAuth(); router.replace("/"); };
 
@@ -92,7 +97,7 @@ export default function AdminDashboard() {
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.navRow} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm }}>
         <NavChip icon="people" label="Penjahit" onPress={() => router.push("/admin/penjahit-mgmt")} testID="nav-penjahit" />
-        <NavChip icon="shield" label="Admin" onPress={() => router.push("/admin/admin-mgmt")} testID="nav-admin" />
+        {isSuperAdmin && <NavChip icon="shield" label="Admin" onPress={() => router.push("/admin/admin-mgmt")} testID="nav-admin" />}
         <NavChip icon="cloud-download" label="Sync Master" onPress={syncMaster} loading={syncingMaster} testID="nav-sync-master" />
         <NavChip icon="settings" label="Settings" onPress={() => router.push("/admin/settings")} testID="nav-settings" />
       </ScrollView>

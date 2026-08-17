@@ -133,6 +133,11 @@ async def require_admin(user = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 
+async def require_super_admin(user = Depends(get_current_user)):
+    if user.get("role") != "admin" or not user.get("is_super_admin"):
+        raise HTTPException(status_code=403, detail="Hanya Super Admin yang dapat mengelola admin")
+    return user
+
 def tm(t: Optional[str]) -> Optional[int]:
     if not t or not isinstance(t, str) or ":" not in t:
         return None
@@ -270,7 +275,7 @@ async def admin_login(body: AdminLoginBody):
     if not admin or not verify_pw(body.password, admin["password_hash"]):
         raise HTTPException(status_code=401, detail="Username atau password salah")
     token = make_token(admin["id"], "admin")
-    return {"token": token, "user": {"id": admin["id"], "nama": admin.get("nama", "Admin"), "role": "admin"}}
+    return {"token": token, "user": {"id": admin["id"], "nama": admin.get("nama", "Admin"), "role": "admin", "is_super_admin": bool(admin.get("is_super_admin"))}}
 
 @api_router.get("/auth/me")
 async def me(user = Depends(get_current_user)):
@@ -362,14 +367,14 @@ async def delete_penjahit(user_id: str, admin = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Penjahit tidak ditemukan")
     return {"ok": True}
 
-# ---------- Admin management ----------
+# ---------- Admin management (Super Admin only) ----------
 @api_router.get("/admin/admins")
-async def list_admins(admin = Depends(require_admin)):
+async def list_admins(admin = Depends(require_super_admin)):
     docs = await db.users.find({"role": "admin"}, {"_id": 0, "password_hash": 0}).to_list(50)
     return docs
 
 @api_router.post("/admin/admins")
-async def create_admin(body: CreateAdminBody, admin = Depends(require_admin)):
+async def create_admin(body: CreateAdminBody, admin = Depends(require_super_admin)):
     uname = body.username.strip().lower()
     if len(uname) < 3:
         raise HTTPException(status_code=400, detail="Username minimal 3 karakter")
@@ -382,6 +387,7 @@ async def create_admin(body: CreateAdminBody, admin = Depends(require_admin)):
         "username": uname,
         "nama": (body.nama or body.username).strip(),
         "role": "admin",
+        "is_super_admin": False,
         "password_hash": hash_pw(body.password),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -390,12 +396,15 @@ async def create_admin(body: CreateAdminBody, admin = Depends(require_admin)):
     return a
 
 @api_router.delete("/admin/admins/{admin_id}")
-async def delete_admin(admin_id: str, admin = Depends(require_admin)):
+async def delete_admin(admin_id: str, admin = Depends(require_super_admin)):
     count = await db.users.count_documents({"role": "admin"})
     if count <= 1:
         raise HTTPException(status_code=400, detail="Minimal harus ada 1 admin")
     if admin_id == admin["id"]:
         raise HTTPException(status_code=400, detail="Tidak bisa menghapus akun sendiri")
+    target = await db.users.find_one({"id": admin_id, "role": "admin"})
+    if target and target.get("is_super_admin"):
+        raise HTTPException(status_code=400, detail="Tidak bisa menghapus akun Super Admin")
     res = await db.users.delete_one({"id": admin_id, "role": "admin"})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Admin tidak ditemukan")
@@ -766,17 +775,27 @@ async def root():
 DEFAULT_LAIN = ["Ke Toilet", "Makan", "Sholat", "Istirahat", "Bantu Numpuk", "Ambil Bahan", "Menulis"]
 
 async def seed_data():
-    admin = await db.users.find_one({"role": "admin"})
-    if not admin:
-        await db.users.insert_one({
-            "id": str(uuid.uuid4()),
-            "username": "admin",
-            "nama": "Administrator",
-            "role": "admin",
-            "password_hash": hash_pw("admin123"),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info("Seeded admin user")
+    existing_super = await db.users.find_one({"role": "admin", "is_super_admin": True})
+    if not existing_super:
+        legacy = await db.users.find_one({"role": "admin", "username": "admin"}) \
+            or await db.users.find_one({"role": "admin"}, sort=[("created_at", 1)])
+        target = {
+            "username": "super admin da",
+            "nama": "Super Admin DA",
+            "password_hash": hash_pw("aYoanalisa123*"),
+            "is_super_admin": True,
+        }
+        if legacy:
+            await db.users.update_one({"id": legacy["id"]}, {"$set": target})
+            logger.info("Migrated/promoted existing admin to Super Admin DA")
+        else:
+            await db.users.insert_one({
+                "id": str(uuid.uuid4()),
+                "role": "admin",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                **target,
+            })
+            logger.info("Seeded Super Admin DA")
     for v in DEFAULT_LAIN:
         await db.master_data.update_one(
             {"type": "aktivitas_lain", "value_lower": v.lower()},
