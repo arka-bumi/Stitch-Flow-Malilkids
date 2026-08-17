@@ -1,5 +1,6 @@
 {
   "name": "frontend",
+  "homepage": "https://arka-bumi.github.io/Stitch-Flow-Malilkids",
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
