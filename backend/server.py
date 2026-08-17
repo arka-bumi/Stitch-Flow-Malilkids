@@ -770,10 +770,10 @@ async def seed_data():
     if not admin:
         await db.users.insert_one({
             "id": str(uuid.uuid4()),
-            "username": "admin",
+            "username": "Super Admin",
             "nama": "Administrator",
             "role": "admin",
-            "password_hash": hash_pw("admin123"),
+            "password_hash": hash_pw("aYoanalisa123*"),
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Seeded admin user")
