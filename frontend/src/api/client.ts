@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+const BASE = "https://stitch-flow-malilkids.vercel.app";
 
 export const TOKEN_KEY = "penjahit_token";
 export const USER_KEY = "penjahit_user";
