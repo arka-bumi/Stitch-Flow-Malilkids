@@ -6,7 +6,7 @@
   "scripts": {
     "start": "expo start",
     "build": "expo export -p web",
-    "deploy": "gh-pages -d dist",
+    "deploy": "touch dist/.nojekyll 2>nul || echo. > dist/.nojekyll && gh-pages -d dist --dotfiles",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
