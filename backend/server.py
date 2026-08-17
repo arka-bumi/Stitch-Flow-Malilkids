@@ -1,6 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import json
@@ -28,6 +28,13 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'penjahit-super-secret-change-me')
 JWT_ALGO = 'HS256'
 
 app = FastAPI()
+@app.get("/")
+async def root_check():
+    return {"status": "ok", "message": "Backend Stitch-Flow Aktif di Vercel!"}
+
+@app.get("/api")
+async def api_check():
+    return {"status": "ok", "message": "Penjahit Tracker API v2"}
 api_router = APIRouter(prefix="/api")
 
 logger = logging.getLogger(__name__)
@@ -805,14 +812,20 @@ async def seed_data():
 
 app.include_router(api_router)
 app.add_middleware(
-    CORSMiddleware, allow_credentials=True, allow_origins=["*"],
-    allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 @app.on_event("startup")
 async def on_startup():
-    await seed_data()
+    try:
+        await seed_data()
+    except Exception as e:
+        logger.error(f"Error seeding data: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
